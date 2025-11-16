@@ -1,0 +1,6 @@
+[TYPECHECK]
+extension-pkg-whitelist=cv2
+generated-members=cv2.*
+
+[MESSAGES CONTROL]
+disable=too-many-locals,broad-exception-caught
