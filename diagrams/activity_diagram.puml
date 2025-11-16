@@ -1,0 +1,61 @@
+@startuml Enhanced Document Processor Activity Diagram
+!theme plain
+skinparam activity {
+    BackgroundColor lightblue
+    BorderColor black
+    FontSize 12
+}
+skinparam decision {
+    BackgroundColor lightyellow
+    BorderColor black
+}
+
+start
+
+:PDF Input;
+:Convert PDF to Images\n(PyMuPDF);
+
+partition "Image Enhancement" {
+    :Enhance Contrast (1.3x);
+    :Enhance Sharpness (1.2x);
+    :Apply Denoising;
+    :Adaptive Sizing\n(1200-2400px);
+}
+
+partition "Dual Analysis" {
+    fork
+        :OCR Analysis\n(PaddleOCR)\n- Extract text\n- Get confidence scores\n- Detect bounding boxes;
+    fork again
+        :Structure Analysis\n(PPStructureV3)\n- Identify titles\n- Detect headers\n- Find paragraphs\n- Locate figures/tables;
+    end fork
+}
+
+:Combine OCR & Structure\n- Match by bounding box overlap (50%)\n- Create unified elements;
+
+:Build Hierarchical Structure\n- Sort by Y,X position\n- Assign hierarchy levels\n- Create parent-child relationships;
+
+partition "Quality Filtering" {
+    :Filter OCR Confidence\n(≥0.85 threshold);
+    :Validate Content\n- Remove garbled text\n- Check alpha ratio (≥50%)\n- Filter special characters;
+}
+
+partition "Semantic Chunking" {
+    :Group Elements\n(150-400 tokens);
+    :Create Coherent Content\n(Title - Subtitle: Content);
+    :Generate Fragment ID\n(MD5 hash);
+    :Build Metadata\n- Page, bbox, confidence\n- Section titles, hierarchy\n- Token count, element count;
+}
+
+:Output Chunks\n- fragment_id\n- content\n- metadata;
+
+partition "Elasticsearch Integration" {
+    :Upload Content\n(without vectors);
+    :Generate Embeddings\n(sentence-transformers);
+    :Update with Vectors\n(embeddings field);
+}
+
+:RAG-Ready Chunks;
+
+stop
+
+@enduml

@@ -1,0 +1,105 @@
+@startuml Enhanced Document Processor Sequence Diagram
+!theme plain
+skinparam participant {
+    BackgroundColor lightblue
+    BorderColor black
+}
+
+participant "Client" as C
+participant "DocumentProcessor" as DP
+participant "PDFConverter" as PDF
+participant "ImageEnhancer" as IE
+participant "PaddleOCR" as OCR
+participant "PPStructureV3" as PS
+participant "HierarchyBuilder" as HB
+participant "ChunkGenerator" as CG
+participant "ElasticsearchClient" as ES
+participant "EmbeddingModel" as EM
+
+C -> DP: process_document(pdf_path)
+activate DP
+
+DP -> PDF: pdf_to_images(pdf_path)
+activate PDF
+PDF --> DP: images[]
+deactivate PDF
+
+loop for each page
+    DP -> IE: enhance_image_for_ocr(image)
+    activate IE
+    IE -> IE: enhance_contrast(1.3x)
+    IE -> IE: enhance_sharpness(1.2x)
+    IE -> IE: apply_denoising()
+    IE -> IE: adaptive_sizing(1200-2400px)
+    IE --> DP: enhanced_image
+    deactivate IE
+    
+    par OCR Analysis
+        DP -> OCR: predict(enhanced_image)
+        activate OCR
+        OCR --> DP: ocr_result\n{texts, scores, boxes}
+        deactivate OCR
+    else Structure Analysis
+        DP -> PS: predict(enhanced_image)
+        activate PS
+        PS --> DP: structure_result\n{elements, labels, bboxes}
+        deactivate PS
+    end
+    
+    DP -> DP: combine_ocr_and_structure()
+    DP -> DP: post_process_ocr_text()
+    
+    DP -> HB: build_hierarchical_structure(elements, page_num)
+    activate HB
+    HB -> HB: sort_by_position()
+    HB -> HB: assign_hierarchy_levels()
+    HB -> HB: create_parent_child_relationships()
+    HB --> DP: hierarchy[]
+    deactivate HB
+    
+    DP -> CG: create_semantic_chunks(hierarchy, page_num)
+    activate CG
+    CG -> CG: filter_quality_content(confidence≥0.85)
+    CG -> CG: group_elements(150-400 tokens)
+    CG -> CG: create_coherent_content()
+    CG -> CG: generate_fragment_id()
+    CG -> CG: create_chunk_metadata()
+    CG --> DP: chunks[]
+    deactivate CG
+end
+
+DP --> C: all_chunks[]
+deactivate DP
+
+note over C: Elasticsearch Integration Phase
+
+C -> ES: bulk_create_chunks(chunks)
+activate ES
+ES --> C: upload_response
+deactivate ES
+
+C -> ES: get_chunks_without_vectors()
+activate ES
+ES --> C: chunks_without_embeddings[]
+deactivate ES
+
+loop for each chunk without vector
+    C -> ES: get_chunk_content(fragment_id)
+    activate ES
+    ES --> C: content
+    deactivate ES
+    
+    C -> EM: encode(content)
+    activate EM
+    EM --> C: embedding_vector
+    deactivate EM
+    
+    C -> ES: add_vector_to_chunk(fragment_id, embedding)
+    activate ES
+    ES --> C: update_response
+    deactivate ES
+end
+
+note over C: RAG-Ready Chunks Available
+
+@enduml
