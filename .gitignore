@@ -1,0 +1,40 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+venv/
+env/
+.venv/
+.env/
+virtualenv/
+ENV/
+env.bak/
+venv.bak/
+
+# Temporary files
+temp_page_*.png
+*.tmp
+
+# Output directories
+outputs/
+pdfs/
+
+# IDE files
+.github/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Personal settings
+.env
+
+# Output files
+outputs/vectorization/
