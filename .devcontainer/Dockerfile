@@ -3,19 +3,12 @@ FROM python:3.9-slim
 # Install system dependencies for OpenCV, OCR, and PDF processing
 RUN apt-get update && apt-get install -y \
     # OpenCV dependencies
-    libgl1-mesa-glx \
+    libgl1-mesa-dri \
     libglib2.0-0 \
-    libsm6 \
-    libxext6 \
-    libxrender-dev \
     libgomp1 \
-    libgthread-2.0-0 \
-    # OCR and image processing
+    # Image processing
     libopencv-dev \
-    python3-opencv \
     # PDF processing
-    libmupdf-dev \
-    # General utilities
     wget \
     curl \
     git \
