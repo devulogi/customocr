@@ -4,6 +4,8 @@ from typing import List, Dict, Any
 import json
 from pathlib import Path
 import logging
+import hashlib
+import re
 import pymupdf as fitz  # PyMuPDF
 import cv2
 import numpy as np
@@ -290,7 +292,6 @@ def post_process_ocr_text(text: str) -> str:
     Purpose: Applies pattern-based corrections and spacing fixes to improve
     text readability and semantic search effectiveness.
     """
-    import re  # pylint: disable=import-outside-toplevel
 
     # Common OCR corrections
     corrections = {
@@ -442,8 +443,6 @@ def generate_fragment_id(elements: List[Dict[str, Any]], page_num: int) -> str:
     Purpose: Generates stable hash-based IDs using page number, position, and
     content for reliable chunk identification across processing runs.
     """
-    import hashlib
-
     primary = next(
         (
             e
@@ -676,8 +675,8 @@ def save_chunks_for_vectorization(
 if __name__ == "__main__":
     print("[MAIN] Starting Enhanced Document Processor")
     # pdf_path = get_pdf_path("Simple_Guide.pdf")
-    pdf_path = get_pdf_path("sampe.png")
-    chunks = process_document(pdf_path)
+    PDF_PATH = get_pdf_path("sampe.png")
+    chunks = process_document(PDF_PATH)
 
     # Save for vectorization
     print("[MAIN] Preparing output directory")
@@ -686,7 +685,7 @@ if __name__ == "__main__":
     save_chunks_for_vectorization(chunks, str(output_dir / "document_chunks.json"))
 
     # Generate hierarchical markdown
-    generate_hierarchical_markdown(pdf_path, str(output_dir / "document.md"))
+    generate_hierarchical_markdown(PDF_PATH, str(output_dir / "document.md"))
 
     print(f"[MAIN] Generated {len(chunks)} chunks for vectorization")
     for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
