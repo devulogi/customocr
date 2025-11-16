@@ -1,0 +1,12 @@
+# Core dependencies for Enhanced Document Processor
+PyMuPDF>=1.23.0
+opencv-python>=4.8.0
+numpy>=1.24.0
+paddlepaddle>=3.2.1
+paddleocr>=3.3.2
+paddlex>=3.3.9
+Pillow>=10.0.0
+
+# Additional dependencies
+pathlib2>=2.3.7
+typing-extensions>=4.7.0
