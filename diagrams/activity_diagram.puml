@@ -14,40 +14,41 @@ start
 
 :PDF Input;
 
-switch (Processing Mode?)
-case (Single Page)
-    :Process First Page Only\n(Fastest);
-case (All Pages - Page-by-page)
-    :Extract Each Page as Image\n(PyMuPDF);
-case (All Pages - Built-in)
-    :Built-in PDF Processing\n(PaddleOCR/PPStructureV3);
-endswitch
+:PDF to Images Conversion\n(PyMuPDF)\n- Convert each page to OpenCV array\n- Maintain resolution and quality;
 
-partition "Dual Analysis" {
-    fork
-        :OCR Analysis\n(PaddleOCR)\n- Extract text\n- Get confidence scores\n- Detect bounding boxes;
-    fork again
-        :Structure Analysis\n(PPStructureV3)\n- Identify titles\n- Detect headers\n- Find paragraphs\n- Locate figures/tables;
-    end fork
+partition "Page Processing Loop" {
+    :Image Enhancement\n- Contrast & Sharpness (1.3x, 1.2x)\n- Denoising (fastNlMeansDenoisingColored)\n- Adaptive sizing (1200-2400px);
+    
+    partition "Dual Analysis" {
+        fork
+            :OCR Analysis\n(PaddleOCR)\n- Extract text with confidence\n- Get bounding boxes\n- Document orientation;
+        fork again
+            :Structure Analysis\n(PPStructureV3)\n- Identify document elements\n- Classify titles, headers, text\n- Detect figures and tables;
+        end fork
+    }
+    
+    :Post-process OCR Text\n- Fix common OCR errors\n- Correct spacing issues\n- Apply text corrections;
+    
+    :Combine OCR & Structure\n- Spatial indexing for O(log n) matching\n- Bounding box overlap (50% threshold)\n- Create unified elements;
+    
+    :Build Hierarchical Structure\n- Sort by Y,X position (reading order)\n- Assign hierarchy levels (1-5)\n- Create parent-child relationships\n- Level-based parent tracking;
+    
+    partition "Semantic Chunking" {
+        :Process All Elements\n(No quality filtering - use all content);
+        :Group Elements\n(150-400 tokens per chunk);
+        :Create Coherent Content\n(Title - Subtitle: Content format);
+        :Generate Fragment ID\n(MD5 hash with page + bbox + content);
+        :Build Rich Metadata\n- Page, bbox, confidence\n- Section titles, hierarchy path\n- Token count, element count;
+    }
 }
 
-:Post-process OCR Text\n- Fix common errors\n- Correct spacing;
+fork
+    :Save Chunks for Vectorization\n- JSON format with fragment_id\n- Ready for Elasticsearch indexing;
+fork again
+    :Generate Hierarchical Markdown\n- Preserve document structure\n- Markdown headers (H1-H5)\n- Page separators;
+end fork
 
-:Combine OCR & Structure\n- Match by bounding box overlap (50%)\n- Create unified elements;
-
-:Build Hierarchical Structure\n- Sort by Y,X position\n- Assign hierarchy levels\n- Create parent-child relationships;
-
-partition "Semantic Chunking" {
-    :Process All Elements\n(No Quality Filtering);
-    :Group Elements\n(150-400 tokens);
-    :Create Coherent Content\n(Title - Subtitle: Content);
-    :Generate Fragment ID\n(MD5 hash);
-    :Build Metadata\n- Page, bbox, confidence\n- Section titles, hierarchy\n- Token count, element count;
-}
-
-:Save Chunks for Vectorization\n- JSON format\n- Ready for vector database;
-
-:RAG-Ready Chunks;
+:Output Files\n- document_chunks.json\n- document.md;
 
 stop
 
