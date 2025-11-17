@@ -1,7 +1,8 @@
 {
   "name": "OCR Document Processor",
   "build": {
-    "dockerfile": "Dockerfile"
+    "dockerfile": "Dockerfile",
+    "context": ".."
   },
   "features": {
     "ghcr.io/devcontainers/features/common-utils:2": {
@@ -19,10 +20,13 @@
         "ms-python.pylint",
         "ms-toolsai.jupyter",
         "streetsidesoftware.code-spell-checker",
-        "ms-vscode.vscode-json"
+        "ms-vscode.vscode-json",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "AmazonWebServices.aws-toolkit-vscode"
       ],
       "settings": {
-        "python.defaultInterpreterPath": "/usr/local/bin/python",
+        "python.defaultInterpreterPath": "/workspace/venv/bin/python",
         "python.analysis.extraPaths": ["/workspace"],
         "python.analysis.typeCheckingMode": "basic",
         "editor.formatOnSave": true,
@@ -32,7 +36,7 @@
       }
     }
   },
-  "postCreateCommand": "pip install -r requirements.txt && python -c 'import paddleocr; print(\"PaddleOCR installed successfully\")'",
+
   "mounts": [
     "source=${localWorkspaceFolder}/pdfs,target=/workspace/pdfs,type=bind",
     "source=${localWorkspaceFolder}/outputs,target=/workspace/outputs,type=bind"
