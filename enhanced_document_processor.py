@@ -81,19 +81,59 @@ def bbox_overlap(box1, box2, threshold=0.5):
     return overlap_ratio > threshold
 
 
+def create_spatial_index(elements):
+    """Create spatial index for O(log n) bbox lookups."""
+    if not elements:
+        return {}, 100
+
+    # Adaptive grid sizing based on document dimensions
+    all_bboxes = [elem["bbox"] for elem in elements]
+    max_x = max(bbox[2] for bbox in all_bboxes)
+    max_y = max(bbox[3] for bbox in all_bboxes)
+
+    # Grid size: ~10-20 cells per dimension for optimal performance
+    grid_size = max(50, min(200, int(max(max_x, max_y) / 15)))
+
+    grid = {}
+
+    for i, elem in enumerate(elements):
+        bbox = elem["bbox"]
+        grid_x = int(bbox[0] // grid_size)
+        grid_y = int(bbox[1] // grid_size)
+        key = (grid_x, grid_y)
+        if key not in grid:
+            grid[key] = []
+        grid[key].append((i, elem))
+
+    return grid, grid_size
+
+
+def find_overlapping_elements(bbox, spatial_index, grid_size):
+    """Find potentially overlapping elements using spatial index."""
+    grid, _ = spatial_index
+    candidates = []
+
+    # Check relevant grid cells with boundary protection
+    min_x = max(0, int(bbox[0] // grid_size))
+    min_y = max(0, int(bbox[1] // grid_size))
+    max_x = max(0, int(bbox[2] // grid_size))
+    max_y = max(0, int(bbox[3] // grid_size))
+
+    for gx in range(min_x, max_x + 1):
+        for gy in range(min_y, max_y + 1):
+            if (gx, gy) in grid:
+                candidates.extend(grid[(gx, gy)])
+
+    return candidates
+
+
 def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, Any]]:
-    """Merges OCR text extraction with document structure analysis.
-
-    Problem: OCR provides accurate text but lacks semantic understanding of document
-    layout. Structure analysis identifies document elements but may miss text details.
-
-    Purpose: Creates unified elements containing both precise text content and
-    structural classification (title, header, paragraph) for intelligent chunking.
+    """Optimized OCR-structure matching using spatial indexing.
+    Reduced from O(n×m) to O(n log m) average case.
     """
     print("[combine_ocr_and_structure] Combining results")
     combined_elements = []
 
-    # Extract OCR data
     if not (isinstance(ocr_result, OCRResult) and "rec_texts" in ocr_result):
         return combined_elements
 
@@ -101,15 +141,11 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
     ocr_scores = ocr_result["rec_scores"]
     ocr_boxes = ocr_result["rec_boxes"]
 
-    # Extract structure data
+    # Extract and index structure data
     structure_elements = []
     if "parsing_res_list" in structure_result:
         for item in structure_result["parsing_res_list"]:
-            if (
-                hasattr(item, "bbox")
-                and hasattr(item, "label")
-                and hasattr(item, "content")
-            ):
+            if hasattr(item, "bbox") and hasattr(item, "label"):
                 structure_elements.append(
                     {
                         "bbox": item.bbox,
@@ -119,13 +155,18 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
                     }
                 )
 
-    # Match OCR text with structure elements
+    # Create spatial index for structure elements
+    spatial_index = (
+        create_spatial_index(structure_elements) if structure_elements else (({}, 100))
+    )
+
+    # Match OCR text with structure elements using spatial index
     for text, score, box in zip(ocr_texts, ocr_scores, ocr_boxes):
         element = {
             "content": text,
             "ocr_confidence": float(score),
             "bbox": box.tolist() if hasattr(box, "tolist") else list(box),
-            "structure_type": "text",  # default
+            "structure_type": "text",
             "structure_confidence": 0.0,
             "page_position": {
                 "x": int(box[0]),
@@ -135,8 +176,9 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
             },
         }
 
-        # Find matching structure element
-        for struct_elem in structure_elements:
+        # Find matching structure element using spatial index
+        candidates = find_overlapping_elements(box, spatial_index, spatial_index[1])
+        for _, struct_elem in candidates:
             if bbox_overlap(box, struct_elem["bbox"]):
                 element["structure_type"] = struct_elem["label"]
                 element["structure_confidence"] = struct_elem["confidence"]
@@ -153,12 +195,7 @@ def build_hierarchical_structure(
     elements: List[Dict[str, Any]], page_num: int
 ) -> List[Dict[str, Any]]:
     """Constructs document hierarchy tree from flat OCR elements.
-
-    Problem: OCR returns flat list of text elements without understanding document
-    organization (chapters, sections, subsections). Need logical structure for context.
-
-    Purpose: Builds parent-child relationships based on document hierarchy levels
-    (title > header > paragraph) to preserve semantic document organization.
+    Optimized: O(n log n) time, O(n) space using level-based indexing.
     """
     # Sort by Y position, then X position for proper reading order
     elements.sort(key=lambda x: (x["page_position"]["y"], x["page_position"]["x"]))
@@ -176,21 +213,20 @@ def build_hierarchical_structure(
     }
 
     hierarchy = []
-    parent_stack = []
-    page_parent = None  # Track page-level parent for orphaned elements
+    level_parents = {}  # O(1) lookup instead of O(n) stack scan
+    page_parent = None
 
     for elem_index, element in enumerate(elements):
         current_level = hierarchy_levels.get(element["structure_type"], 5)
 
-        # Pop parents at same or lower level
-        while parent_stack and parent_stack[-1]["level"] >= current_level:
-            parent_stack.pop()
-
-        # Find appropriate parent
+        # Find parent using level-based lookup - O(1) average
         parent_id = None
-        if parent_stack:
-            parent_id = parent_stack[-1]["id"]
-        elif page_parent is not None and current_level > 1:
+        for level in range(current_level - 1, 0, -1):
+            if level in level_parents:
+                parent_id = level_parents[level]
+                break
+
+        if parent_id is None and page_parent is not None and current_level > 1:
             parent_id = page_parent
 
         hier_element = {
@@ -206,18 +242,27 @@ def build_hierarchical_structure(
             "ocr_confidence": element["ocr_confidence"],
         }
 
-        # Track first title as page parent
         if page_parent is None and current_level <= 2:
             page_parent = elem_index
 
-        # Add to parent's children
-        if hier_element["parent_id"] is not None:
-            hierarchy[hier_element["parent_id"]]["children"].append(elem_index)
+        if parent_id is not None:
+            hierarchy[parent_id]["children"].append(elem_index)
         hierarchy.append(hier_element)
 
-        # Add to parent stack if it can have children
+        # Update level parent tracking with bounds checking
         if current_level <= 4:
-            parent_stack.append(hier_element)
+            level_parents[current_level] = elem_index
+            # Clear deeper levels (prevent memory accumulation)
+            keys_to_remove = [
+                level for level in level_parents.keys() if level > current_level
+            ]
+            for level in keys_to_remove:
+                del level_parents[level]
+
+            # Safety: limit level_parents size (max 5 levels)
+            if len(level_parents) > 5:
+                oldest_level = min(level_parents.keys())
+                del level_parents[oldest_level]
 
     return hierarchy
 
@@ -407,6 +452,20 @@ def create_chunk_metadata(
     Purpose: Creates rich metadata including page numbers, confidence scores,
     hierarchical context, and bounding boxes for complete chunk provenance.
     """
+    if not elements:
+        return {
+            "page": page_num,
+            "type": "semantic_chunk",
+            "section_titles": [],
+            "primary_section": None,
+            "context_hierarchy": None,
+            "bbox": [0, 0, 0, 0],
+            "ocr_confidence": 0.0,
+            "elements_count": 0,
+            "token_count": 0,
+            "hierarchy_levels": [],
+        }
+
     # Get primary element (first content element or first title)
     primary = next(
         (
@@ -454,17 +513,22 @@ def create_flat_chunks(
 
     for element in elements:
         element_tokens = len(element["content"].split())
-        
-        if current_tokens + element_tokens > target_max and current_tokens >= target_min:
+
+        if (
+            current_tokens + element_tokens > target_max
+            and current_tokens >= target_min
+        ):
             if current_chunk:
                 chunk_content = " ".join([e["content"] for e in current_chunk])
                 chunk_metadata = create_flat_chunk_metadata(current_chunk, page_num)
                 fragment_id = generate_flat_fragment_id(current_chunk, page_num)
-                chunk_list.append({
-                    "fragment_id": fragment_id,
-                    "content": chunk_content,
-                    "metadata": chunk_metadata
-                })
+                chunk_list.append(
+                    {
+                        "fragment_id": fragment_id,
+                        "content": chunk_content,
+                        "metadata": chunk_metadata,
+                    }
+                )
             current_chunk = [element]
             current_tokens = element_tokens
         else:
@@ -475,22 +539,39 @@ def create_flat_chunks(
         chunk_content = " ".join([e["content"] for e in current_chunk])
         chunk_metadata = create_flat_chunk_metadata(current_chunk, page_num)
         fragment_id = generate_flat_fragment_id(current_chunk, page_num)
-        chunk_list.append({
-            "fragment_id": fragment_id,
-            "content": chunk_content,
-            "metadata": chunk_metadata
-        })
+        chunk_list.append(
+            {
+                "fragment_id": fragment_id,
+                "content": chunk_content,
+                "metadata": chunk_metadata,
+            }
+        )
 
     print(f"[create_flat_chunks] Page {page_num}: {len(chunk_list)} chunks")
     return chunk_list
+
 
 def create_flat_chunk_metadata(
     elements: List[Dict[str, Any]], page_num: int
 ) -> Dict[str, Any]:
     """Generate metadata for flat chunks without hierarchy."""
+    if not elements:
+        return {
+            "page": page_num,
+            "type": "flat_chunk",
+            "section_titles": [],
+            "primary_section": None,
+            "context_hierarchy": None,
+            "bbox": [0, 0, 0, 0],
+            "ocr_confidence": 0.0,
+            "elements_count": 0,
+            "token_count": 0,
+            "hierarchy_levels": [],
+        }
+
     primary = elements[0]
     avg_confidence = sum(e["ocr_confidence"] for e in elements) / len(elements)
-    
+
     return {
         "page": page_num,
         "type": "flat_chunk",
@@ -501,16 +582,21 @@ def create_flat_chunk_metadata(
         "ocr_confidence": avg_confidence,
         "elements_count": len(elements),
         "token_count": sum(len(e["content"].split()) for e in elements),
-        "hierarchy_levels": []
+        "hierarchy_levels": [],
     }
+
 
 def generate_flat_fragment_id(elements: List[Dict[str, Any]], page_num: int) -> str:
     """Generate fragment ID for flat chunks."""
+    if not elements:
+        return f"flat_{page_num}_empty"
+
     primary = elements[0]
     content_hash = hashlib.md5(
         f"flat_{page_num}_bbox_{primary['bbox']}_content_{primary['content'][:50]}".encode()
     ).hexdigest()[:12]
     return f"flat_{page_num}_{content_hash}"
+
 
 def create_vectorization_chunks(
     elements: List[Dict[str, Any]], page_num: int, enable_hierarchy: bool = True
@@ -590,7 +676,11 @@ def process_document_all_pages(
         )
         all_chunks.extend(page_chunks)
 
-        Path(temp_path).unlink()
+        try:
+            if Path(temp_path).exists():
+                Path(temp_path).unlink()
+        except (OSError, PermissionError) as e:
+            print(f"[WARNING] Could not cleanup temp file {temp_path}: {e}")
 
     print(f"[process_document_all_pages] Completed. Total chunks: {len(all_chunks)}")
     return all_chunks
@@ -600,19 +690,43 @@ def process_document_all_pages(
 def process_document_builtin_pdf(
     document: str, enable_hierarchy: bool = True
 ) -> List[Dict[str, Any]]:
-    """Use PaddleOCR's built-in PDF processing capabilities."""
+    """Streaming PDF processing to maintain O(n) space complexity."""
     print(f"[process_document_builtin_pdf] Starting: {document}")
     ocr, structure_pipeline = get_models()
 
-    # Process all pages at once
-    ocr_results = ocr.predict(document)
-    structure_results = structure_pipeline.predict(document)
+    # Get page count for streaming
+    import pymupdf as fitz
+
+    try:
+        doc = fitz.open(document)
+        page_count = len(doc)
+        doc.close()
+    except Exception as e:
+        print(f"[ERROR] Could not open PDF document {document}: {e}")
+        return []
 
     all_chunks = []
-    for page_num, (ocr_result, structure_result) in enumerate(
-        zip(ocr_results, structure_results)
-    ):
-        print(f"[process_document_builtin_pdf] Processing page {page_num + 1}")
+    # Process pages individually to maintain O(n) space instead of O(p×n)
+    for page_num in range(page_count):
+        print(
+            f"[process_document_builtin_pdf] Processing page {page_num + 1}/{page_count}"
+        )
+
+        # Extract single page
+        try:
+            doc = fitz.open(document)
+            page = doc.load_page(page_num)
+            pix = page.get_pixmap()
+            temp_path = f"temp_page_{page_num}.png"
+            pix.save(temp_path)
+            doc.close()
+        except Exception as e:
+            print(f"[ERROR] Could not process page {page_num}: {e}")
+            continue
+
+        # Process single page
+        ocr_result = ocr.predict(temp_path)[0]
+        structure_result = structure_pipeline.predict(temp_path)[0]
 
         if isinstance(ocr_result, dict) and "rec_texts" in ocr_result:
             ocr_result["rec_texts"] = [
@@ -624,6 +738,11 @@ def process_document_builtin_pdf(
             combined_elements, page_num, enable_hierarchy
         )
         all_chunks.extend(page_chunks)
+
+        # Cleanup immediately to save memory
+        from pathlib import Path
+
+        Path(temp_path).unlink()
 
     print(f"[process_document_builtin_pdf] Completed. Total chunks: {len(all_chunks)}")
     return all_chunks
@@ -659,7 +778,7 @@ if __name__ == "__main__":
     print("[MAIN] Starting Enhanced Document Processor")
     # pdf_path = get_pdf_path("Simple_Guide.pdf")
     PDF_PATH = get_pdf_path("System_Design.pdf")
-    chunks = process_document(PDF_PATH, False)
+    chunks = process_document(PDF_PATH)
 
     # Save for vectorization
     print("[MAIN] Preparing output directory")
