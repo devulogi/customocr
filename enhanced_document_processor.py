@@ -24,7 +24,11 @@ def get_models():
     global _ocr_model, _structure_model
     if _ocr_model is None:
         print("[get_models] Initializing OCR and Structure models...")
-        _ocr_model = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
+        print("[get_models] Loading PaddleOCR model...")
+        _ocr_model = PaddleOCR(
+            use_doc_orientation_classify=True, use_doc_unwarping=True
+        )
+        print("[get_models] Loading PPStructureV3 model...")
         _structure_model = PPStructureV3()
         print("[get_models] Models initialized successfully")
     return _ocr_model, _structure_model
@@ -255,7 +259,7 @@ def post_process_ocr_text(text: str) -> str:
 
 
 def create_semantic_chunks(
-    hierarchy: List[Dict[str, Any]], page_num: int
+    hierarchy: List[Dict[str, Any]], page_num: int, enable_hierarchy: bool = True
 ) -> List[Dict[str, Any]]:
     """Generates contextually-aware passages optimized for chatbot responses.
 
@@ -437,16 +441,95 @@ def create_chunk_metadata(
     }
 
 
-def create_vectorization_chunks(
+def create_flat_chunks(
     elements: List[Dict[str, Any]], page_num: int
 ) -> List[Dict[str, Any]]:
+    """Create simple chunks from OCR elements without hierarchy."""
+    print(f"[create_flat_chunks] Creating flat chunks for page {page_num}")
+    chunk_list = []
+    current_chunk = []
+    current_tokens = 0
+    target_min = 150
+    target_max = 400
+
+    for element in elements:
+        element_tokens = len(element["content"].split())
+        
+        if current_tokens + element_tokens > target_max and current_tokens >= target_min:
+            if current_chunk:
+                chunk_content = " ".join([e["content"] for e in current_chunk])
+                chunk_metadata = create_flat_chunk_metadata(current_chunk, page_num)
+                fragment_id = generate_flat_fragment_id(current_chunk, page_num)
+                chunk_list.append({
+                    "fragment_id": fragment_id,
+                    "content": chunk_content,
+                    "metadata": chunk_metadata
+                })
+            current_chunk = [element]
+            current_tokens = element_tokens
+        else:
+            current_chunk.append(element)
+            current_tokens += element_tokens
+
+    if current_chunk:
+        chunk_content = " ".join([e["content"] for e in current_chunk])
+        chunk_metadata = create_flat_chunk_metadata(current_chunk, page_num)
+        fragment_id = generate_flat_fragment_id(current_chunk, page_num)
+        chunk_list.append({
+            "fragment_id": fragment_id,
+            "content": chunk_content,
+            "metadata": chunk_metadata
+        })
+
+    print(f"[create_flat_chunks] Page {page_num}: {len(chunk_list)} chunks")
+    return chunk_list
+
+def create_flat_chunk_metadata(
+    elements: List[Dict[str, Any]], page_num: int
+) -> Dict[str, Any]:
+    """Generate metadata for flat chunks without hierarchy."""
+    primary = elements[0]
+    avg_confidence = sum(e["ocr_confidence"] for e in elements) / len(elements)
+    
+    return {
+        "page": page_num,
+        "type": "flat_chunk",
+        "section_titles": [],
+        "primary_section": None,
+        "context_hierarchy": None,
+        "bbox": primary["bbox"],
+        "ocr_confidence": avg_confidence,
+        "elements_count": len(elements),
+        "token_count": sum(len(e["content"].split()) for e in elements),
+        "hierarchy_levels": []
+    }
+
+def generate_flat_fragment_id(elements: List[Dict[str, Any]], page_num: int) -> str:
+    """Generate fragment ID for flat chunks."""
+    primary = elements[0]
+    content_hash = hashlib.md5(
+        f"flat_{page_num}_bbox_{primary['bbox']}_content_{primary['content'][:50]}".encode()
+    ).hexdigest()[:12]
+    return f"flat_{page_num}_{content_hash}"
+
+def create_vectorization_chunks(
+    elements: List[Dict[str, Any]], page_num: int, enable_hierarchy: bool = True
+) -> List[Dict[str, Any]]:
     """Create optimized chunks for vectorization."""
-    hierarchy = build_hierarchical_structure(elements, page_num)
-    return create_semantic_chunks(hierarchy, page_num)
+    if enable_hierarchy:
+        print(f"[create_vectorization_chunks] Building hierarchy for page {page_num}")
+        hierarchy = build_hierarchical_structure(elements, page_num)
+        return create_semantic_chunks(hierarchy, page_num, enable_hierarchy)
+    else:
+        # Use pure OCR format without hierarchical processing
+        print(f"[create_vectorization_chunks] Building flat chunks for page {page_num}")
+        return create_flat_chunks(elements, page_num)
 
 
 # Solution 1: Direct processing (first page only)
-def process_document_single_page(document: str) -> List[Dict[str, Any]]:
+def process_document_single_page(
+    document: str, enable_hierarchy: bool = True
+) -> List[Dict[str, Any]]:
     """Process first page only - fastest but limited."""
     print(f"[process_document_single_page] Starting: {document}")
     ocr, structure_pipeline = get_models()
@@ -460,14 +543,16 @@ def process_document_single_page(document: str) -> List[Dict[str, Any]]:
         ]
 
     combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
-    chunks = create_vectorization_chunks(combined_elements, 0)
+    chunks = create_vectorization_chunks(combined_elements, 0, enable_hierarchy)
 
     print(f"[process_document_single_page] Completed. Total chunks: {len(chunks)}")
     return chunks
 
 
 # Solution 2: Page-by-page processing without image conversion
-def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
+def process_document_all_pages(
+    document: str, enable_hierarchy: bool = True
+) -> List[Dict[str, Any]]:
     """Process all pages by iterating through PDF pages."""
     print(f"[process_document_all_pages] Starting: {document}")
 
@@ -500,7 +585,9 @@ def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
             ]
 
         combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
-        page_chunks = create_vectorization_chunks(combined_elements, page_num)
+        page_chunks = create_vectorization_chunks(
+            combined_elements, page_num, enable_hierarchy
+        )
         all_chunks.extend(page_chunks)
 
         Path(temp_path).unlink()
@@ -510,7 +597,9 @@ def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
 
 
 # Solution 3: Built-in PDF processing
-def process_document_builtin_pdf(document: str) -> List[Dict[str, Any]]:
+def process_document_builtin_pdf(
+    document: str, enable_hierarchy: bool = True
+) -> List[Dict[str, Any]]:
     """Use PaddleOCR's built-in PDF processing capabilities."""
     print(f"[process_document_builtin_pdf] Starting: {document}")
     ocr, structure_pipeline = get_models()
@@ -531,7 +620,9 @@ def process_document_builtin_pdf(document: str) -> List[Dict[str, Any]]:
             ]
 
         combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
-        page_chunks = create_vectorization_chunks(combined_elements, page_num)
+        page_chunks = create_vectorization_chunks(
+            combined_elements, page_num, enable_hierarchy
+        )
         all_chunks.extend(page_chunks)
 
     print(f"[process_document_builtin_pdf] Completed. Total chunks: {len(all_chunks)}")
@@ -557,16 +648,18 @@ def save_chunks_for_vectorization(
 
 
 # Default function - uses Solution 2 (all pages) but you can switch to other options. Here are all three options: process_document_single_page, process_document_all_pages, process_document_builtin_pdf
-def process_document(document: str) -> List[Dict[str, Any]]:
+def process_document(
+    document: str, enable_hierarchy: bool = True
+) -> List[Dict[str, Any]]:
     """Process entire document and return vectorization-ready chunks."""
-    return process_document_builtin_pdf(document)
+    return process_document_builtin_pdf(document, enable_hierarchy)
 
 
 if __name__ == "__main__":
     print("[MAIN] Starting Enhanced Document Processor")
     # pdf_path = get_pdf_path("Simple_Guide.pdf")
     PDF_PATH = get_pdf_path("System_Design.pdf")
-    chunks = process_document(PDF_PATH)
+    chunks = process_document(PDF_PATH, False)
 
     # Save for vectorization
     print("[MAIN] Preparing output directory")
