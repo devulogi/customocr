@@ -12,8 +12,7 @@ participant "PaddleOCR" as OCR
 participant "PPStructureV3" as PS
 participant "HierarchyBuilder" as HB
 participant "ChunkGenerator" as CG
-participant "ElasticsearchClient" as ES
-participant "EmbeddingModel" as EM
+participant "FileSystem" as FS
 
 C -> DP: process_document(pdf_path)
 activate DP
@@ -80,38 +79,14 @@ else Solution 3: Built-in PDF Processing
     end
 end
 
+DP -> FS: save_chunks_for_vectorization(chunks, output_path)
+activate FS
+FS --> DP: saved_successfully
+deactivate FS
+
 DP --> C: all_chunks[]
 deactivate DP
 
-note over C: Elasticsearch Integration Phase
-
-C -> ES: bulk_create_chunks(chunks)
-activate ES
-ES --> C: upload_response
-deactivate ES
-
-C -> ES: get_chunks_without_vectors()
-activate ES
-ES --> C: chunks_without_embeddings[]
-deactivate ES
-
-loop for each chunk without vector
-    C -> ES: get_chunk_content(fragment_id)
-    activate ES
-    ES --> C: content
-    deactivate ES
-    
-    C -> EM: encode(content)
-    activate EM
-    EM --> C: embedding_vector
-    deactivate EM
-    
-    C -> ES: add_vector_to_chunk(fragment_id, embedding)
-    activate ES
-    ES --> C: update_response
-    deactivate ES
-end
-
-note over C: RAG-Ready Chunks Available
+note over C: Chunks saved as JSON\nReady for vector database
 
 @enduml

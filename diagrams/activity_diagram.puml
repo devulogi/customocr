@@ -17,9 +17,9 @@ start
 switch (Processing Mode?)
 case (Single Page)
     :Process First Page Only\n(Fastest);
-case (All Pages - Solution 2)
+case (All Pages - Page-by-page)
     :Extract Each Page as Image\n(PyMuPDF);
-case (All Pages - Solution 3)
+case (All Pages - Built-in)
     :Built-in PDF Processing\n(PaddleOCR/PPStructureV3);
 endswitch
 
@@ -45,13 +45,7 @@ partition "Semantic Chunking" {
     :Build Metadata\n- Page, bbox, confidence\n- Section titles, hierarchy\n- Token count, element count;
 }
 
-:Output Chunks\n- fragment_id\n- content\n- metadata;
-
-partition "Elasticsearch Integration" {
-    :Upload Content\n(without vectors);
-    :Generate Embeddings\n(sentence-transformers);
-    :Update with Vectors\n(embeddings field);
-}
+:Save Chunks for Vectorization\n- JSON format\n- Ready for vector database;
 
 :RAG-Ready Chunks;
 
