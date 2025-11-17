@@ -203,9 +203,6 @@ def build_hierarchical_structure(
     return hierarchy
 
 
-
-
-
 def post_process_ocr_text(text: str) -> str:
     """Corrects systematic OCR recognition errors and formatting issues.
 
@@ -240,9 +237,6 @@ def post_process_ocr_text(text: str) -> str:
     cleaned_text = re.sub(r"\s+", " ", cleaned_text)
 
     return cleaned_text.strip()
-
-
-
 
 
 def create_semantic_chunks(
@@ -442,16 +436,18 @@ def process_document_single_page(document: str) -> List[Dict[str, Any]]:
     print(f"[process_document_single_page] Starting: {document}")
     ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
     structure_pipeline = PPStructureV3()
-    
+
     ocr_result = ocr.predict(document)[0]
     structure_result = structure_pipeline.predict(document)[0]
-    
+
     if isinstance(ocr_result, dict) and "rec_texts" in ocr_result:
-        ocr_result["rec_texts"] = [post_process_ocr_text(text) for text in ocr_result["rec_texts"]]
-    
+        ocr_result["rec_texts"] = [
+            post_process_ocr_text(text) for text in ocr_result["rec_texts"]
+        ]
+
     combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
     chunks = create_vectorization_chunks(combined_elements, 0)
-    
+
     print(f"[process_document_single_page] Completed. Total chunks: {len(chunks)}")
     return chunks
 
@@ -460,18 +456,20 @@ def process_document_single_page(document: str) -> List[Dict[str, Any]]:
 def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
     """Process all pages by iterating through PDF pages."""
     print(f"[process_document_all_pages] Starting: {document}")
-    
+
     doc = fitz.open(document)
     page_count = len(doc)
     doc.close()
-    
+
     ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
     structure_pipeline = PPStructureV3()
     all_chunks = []
-    
+
     for page_num in range(page_count):
-        print(f"[process_document_all_pages] Processing page {page_num + 1}/{page_count}")
-        
+        print(
+            f"[process_document_all_pages] Processing page {page_num + 1}/{page_count}"
+        )
+
         # Extract page as temporary image for processing
         doc = fitz.open(document)
         page = doc.load_page(page_num)
@@ -479,19 +477,21 @@ def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
         temp_path = f"temp_page_{page_num}.png"
         pix.save(temp_path)
         doc.close()
-        
+
         ocr_result = ocr.predict(temp_path)[0]
         structure_result = structure_pipeline.predict(temp_path)[0]
-        
+
         if isinstance(ocr_result, dict) and "rec_texts" in ocr_result:
-            ocr_result["rec_texts"] = [post_process_ocr_text(text) for text in ocr_result["rec_texts"]]
-        
+            ocr_result["rec_texts"] = [
+                post_process_ocr_text(text) for text in ocr_result["rec_texts"]
+            ]
+
         combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
         page_chunks = create_vectorization_chunks(combined_elements, page_num)
         all_chunks.extend(page_chunks)
-        
+
         Path(temp_path).unlink()
-    
+
     print(f"[process_document_all_pages] Completed. Total chunks: {len(all_chunks)}")
     return all_chunks
 
@@ -502,30 +502,34 @@ def process_document_builtin_pdf(document: str) -> List[Dict[str, Any]]:
     print(f"[process_document_builtin_pdf] Starting: {document}")
     ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
     structure_pipeline = PPStructureV3()
-    
+
     # Process all pages at once
     ocr_results = ocr.predict(document)
     structure_results = structure_pipeline.predict(document)
-    
+
     all_chunks = []
-    for page_num, (ocr_result, structure_result) in enumerate(zip(ocr_results, structure_results)):
+    for page_num, (ocr_result, structure_result) in enumerate(
+        zip(ocr_results, structure_results)
+    ):
         print(f"[process_document_builtin_pdf] Processing page {page_num + 1}")
-        
+
         if isinstance(ocr_result, dict) and "rec_texts" in ocr_result:
-            ocr_result["rec_texts"] = [post_process_ocr_text(text) for text in ocr_result["rec_texts"]]
-        
+            ocr_result["rec_texts"] = [
+                post_process_ocr_text(text) for text in ocr_result["rec_texts"]
+            ]
+
         combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
         page_chunks = create_vectorization_chunks(combined_elements, page_num)
         all_chunks.extend(page_chunks)
-    
+
     print(f"[process_document_builtin_pdf] Completed. Total chunks: {len(all_chunks)}")
     return all_chunks
 
 
-# Default function - uses Solution 2 (all pages)
+# Default function - uses Solution 2 (all pages) but you can switch to other options. Here are all three options: process_document_single_page, process_document_all_pages, process_document_builtin_pdf
 def process_document(document: str) -> List[Dict[str, Any]]:
     """Process entire document and return vectorization-ready chunks."""
-    return process_document_all_pages(document)
+    return process_document_builtin_pdf(document)
 
 
 def generate_hierarchical_markdown(file: str, output_path: str):
