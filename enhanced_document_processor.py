@@ -7,11 +7,8 @@ import logging
 import hashlib
 import re
 import pymupdf as fitz  # PyMuPDF
-import cv2
-import numpy as np
 from paddleocr import PaddleOCR, PPStructureV3
 from paddlex.inference.pipelines.ocr.result import OCRResult
-from PIL import Image, ImageEnhance
 
 # Setup logging
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(message)s")
@@ -206,58 +203,7 @@ def build_hierarchical_structure(
     return hierarchy
 
 
-def enhance_image_for_ocr(img: np.ndarray) -> np.ndarray:
-    """Optimizes image quality to achieve 0.93+ OCR confidence scores.
 
-    Problem: Raw PDF images often have poor contrast, noise, or suboptimal resolution
-    leading to low OCR accuracy and unreliable text extraction for RAG systems.
-
-    Purpose: Applies contrast enhancement, denoising, and adaptive resizing to
-    maximize OCR confidence while maintaining fast processing speed.
-    """
-    print("[enhance_image_for_ocr] Enhancing image")
-    # Convert to PIL for better processing
-    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
-
-    # Enhance contrast and sharpness
-    enhancer = ImageEnhance.Contrast(pil_img)
-    pil_img = enhancer.enhance(1.3)
-
-    enhancer = ImageEnhance.Sharpness(pil_img)
-    pil_img = enhancer.enhance(1.2)
-
-    # Convert back to OpenCV format
-    enhanced = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-
-    # Denoise
-    enhanced = cv2.fastNlMeansDenoisingColored(enhanced, None, 10, 10, 7, 21)
-
-    # Adaptive sizing for optimal OCR
-    height, width = enhanced.shape[:2]
-
-    # Calculate optimal size based on content density
-    min_size = 1200  # Minimum for clear text recognition
-    max_size = 2400  # Maximum to avoid memory issues
-
-    if height < min_size or width < min_size:
-        # Upscale small images
-        scale = max(min_size / height, min_size / width)
-        new_width = int(width * scale)
-        new_height = int(height * scale)
-        enhanced = cv2.resize(
-            enhanced, (new_width, new_height), interpolation=cv2.INTER_CUBIC
-        )
-    elif height > max_size or width > max_size:
-        # Downscale very large images
-        scale = min(max_size / height, max_size / width)
-        new_width = int(width * scale)
-        new_height = int(height * scale)
-        enhanced = cv2.resize(
-            enhanced, (new_width, new_height), interpolation=cv2.INTER_AREA
-        )
-
-    print("[enhance_image_for_ocr] Enhancement completed")
-    return enhanced
 
 
 def post_process_ocr_text(text: str) -> str:
@@ -296,39 +242,7 @@ def post_process_ocr_text(text: str) -> str:
     return cleaned_text.strip()
 
 
-def is_quality_content(content: str, ocr_confidence: float) -> bool:
-    """Filters unreliable OCR content to maintain RAG system quality.
 
-    Problem: Low-confidence OCR text introduces noise, garbled content, and
-    hallucinations in RAG responses, degrading user experience and trust.
-
-    Purpose: Applies confidence thresholds and content validation to ensure
-    only reliable, readable text enters the vector database for retrieval.
-    """
-    if not content or not content.strip():
-        return False
-
-    # Use adaptive threshold - be less strict to preserve content
-    if ocr_confidence < 0.85:
-        return False
-
-    # Check for garbled text - more lenient
-    alpha_ratio = sum(c.isalpha() for c in content) / max(len(content), 1)
-    if alpha_ratio < 0.5:
-        return False
-
-    # Skip very short content
-    if len(content.strip()) < 2:
-        return False
-
-    # Skip content that's mostly special characters
-    special_char_ratio = sum(
-        not c.isalnum() and not c.isspace() for c in content
-    ) / len(content)
-    if special_char_ratio > 0.5:
-        return False
-
-    return True
 
 
 def create_semantic_chunks(
