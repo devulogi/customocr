@@ -14,6 +14,21 @@ from paddlex.inference.pipelines.ocr.result import OCRResult
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 
+# Global model instances - initialized once
+_ocr_model = None
+_structure_model = None
+
+
+def get_models():
+    """Initialize models once and reuse them."""
+    global _ocr_model, _structure_model
+    if _ocr_model is None:
+        print("[get_models] Initializing OCR and Structure models...")
+        _ocr_model = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
+        _structure_model = PPStructureV3()
+        print("[get_models] Models initialized successfully")
+    return _ocr_model, _structure_model
+
 
 def get_pdf_path(filename: str) -> str:
     """Resolves PDF file path for document processing.
@@ -434,8 +449,7 @@ def create_vectorization_chunks(
 def process_document_single_page(document: str) -> List[Dict[str, Any]]:
     """Process first page only - fastest but limited."""
     print(f"[process_document_single_page] Starting: {document}")
-    ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
-    structure_pipeline = PPStructureV3()
+    ocr, structure_pipeline = get_models()
 
     ocr_result = ocr.predict(document)[0]
     structure_result = structure_pipeline.predict(document)[0]
@@ -461,8 +475,7 @@ def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
     page_count = len(doc)
     doc.close()
 
-    ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
-    structure_pipeline = PPStructureV3()
+    ocr, structure_pipeline = get_models()
     all_chunks = []
 
     for page_num in range(page_count):
@@ -500,8 +513,7 @@ def process_document_all_pages(document: str) -> List[Dict[str, Any]]:
 def process_document_builtin_pdf(document: str) -> List[Dict[str, Any]]:
     """Use PaddleOCR's built-in PDF processing capabilities."""
     print(f"[process_document_builtin_pdf] Starting: {document}")
-    ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
-    structure_pipeline = PPStructureV3()
+    ocr, structure_pipeline = get_models()
 
     # Process all pages at once
     ocr_results = ocr.predict(document)
