@@ -7,8 +7,7 @@ skinparam participant {
 
 participant "Client" as C
 participant "DocumentProcessor" as DP
-participant "PDFConverter" as PDF
-participant "ImageEnhancer" as IE
+participant "PyMuPDF" as PDF
 participant "PaddleOCR" as OCR
 participant "PPStructureV3" as PS
 participant "HierarchyBuilder" as HB
@@ -19,53 +18,66 @@ participant "EmbeddingModel" as EM
 C -> DP: process_document(pdf_path)
 activate DP
 
-DP -> PDF: pdf_to_images(pdf_path)
-activate PDF
-PDF --> DP: images[]
-deactivate PDF
-
-loop for each page
-    DP -> IE: enhance_image_for_ocr(image)
-    activate IE
-    IE -> IE: enhance_contrast(1.3x)
-    IE -> IE: enhance_sharpness(1.2x)
-    IE -> IE: apply_denoising()
-    IE -> IE: adaptive_sizing(1200-2400px)
-    IE --> DP: enhanced_image
-    deactivate IE
+alt Solution 1: Single Page
+    DP -> OCR: predict(document)[0]
+    DP -> PS: predict(document)[0]
+else Solution 2: All Pages (Page-by-page)
+    DP -> PDF: open(document)
+    activate PDF
+    PDF --> DP: page_count
+    deactivate PDF
     
-    par OCR Analysis
-        DP -> OCR: predict(enhanced_image)
-        activate OCR
-        OCR --> DP: ocr_result\n{texts, scores, boxes}
-        deactivate OCR
-    else Structure Analysis
-        DP -> PS: predict(enhanced_image)
-        activate PS
-        PS --> DP: structure_result\n{elements, labels, bboxes}
-        deactivate PS
+    loop for each page
+        DP -> PDF: extract_page_as_image(page_num)
+        activate PDF
+        PDF --> DP: temp_image_file
+        deactivate PDF
+        
+        par OCR Analysis
+            DP -> OCR: predict(temp_image_file)
+            activate OCR
+            OCR --> DP: ocr_result\n{texts, scores, boxes}
+            deactivate OCR
+        else Structure Analysis
+            DP -> PS: predict(temp_image_file)
+            activate PS
+            PS --> DP: structure_result\n{elements, labels, bboxes}
+            deactivate PS
+        end
+        
+        DP -> DP: post_process_ocr_text()
+        DP -> DP: combine_ocr_and_structure()
+        
+        DP -> HB: build_hierarchical_structure(elements, page_num)
+        activate HB
+        HB -> HB: sort_by_position()
+        HB -> HB: assign_hierarchy_levels()
+        HB -> HB: create_parent_child_relationships()
+        HB --> DP: hierarchy[]
+        deactivate HB
+        
+        DP -> CG: create_semantic_chunks(hierarchy, page_num)
+        activate CG
+        note right: No quality filtering\n(process all elements)
+        CG -> CG: group_elements(150-400 tokens)
+        CG -> CG: create_coherent_content()
+        CG -> CG: generate_fragment_id()
+        CG -> CG: create_chunk_metadata()
+        CG --> DP: chunks[]
+        deactivate CG
+        
+        DP -> DP: cleanup_temp_file()
     end
+else Solution 3: Built-in PDF Processing
+    DP -> OCR: predict(document) [all pages]
+    DP -> PS: predict(document) [all pages]
     
-    DP -> DP: combine_ocr_and_structure()
-    DP -> DP: post_process_ocr_text()
-    
-    DP -> HB: build_hierarchical_structure(elements, page_num)
-    activate HB
-    HB -> HB: sort_by_position()
-    HB -> HB: assign_hierarchy_levels()
-    HB -> HB: create_parent_child_relationships()
-    HB --> DP: hierarchy[]
-    deactivate HB
-    
-    DP -> CG: create_semantic_chunks(hierarchy, page_num)
-    activate CG
-    CG -> CG: filter_quality_content(confidence≥0.85)
-    CG -> CG: group_elements(150-400 tokens)
-    CG -> CG: create_coherent_content()
-    CG -> CG: generate_fragment_id()
-    CG -> CG: create_chunk_metadata()
-    CG --> DP: chunks[]
-    deactivate CG
+    loop for each page result
+        DP -> DP: post_process_ocr_text()
+        DP -> DP: combine_ocr_and_structure()
+        DP -> HB: build_hierarchical_structure()
+        DP -> CG: create_semantic_chunks()
+    end
 end
 
 DP --> C: all_chunks[]

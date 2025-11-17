@@ -13,14 +13,15 @@ skinparam decision {
 start
 
 :PDF Input;
-:Convert PDF to Images\n(PyMuPDF);
 
-partition "Image Enhancement" {
-    :Enhance Contrast (1.3x);
-    :Enhance Sharpness (1.2x);
-    :Apply Denoising;
-    :Adaptive Sizing\n(1200-2400px);
-}
+switch (Processing Mode?)
+case (Single Page)
+    :Process First Page Only\n(Fastest);
+case (All Pages - Solution 2)
+    :Extract Each Page as Image\n(PyMuPDF);
+case (All Pages - Solution 3)
+    :Built-in PDF Processing\n(PaddleOCR/PPStructureV3);
+endswitch
 
 partition "Dual Analysis" {
     fork
@@ -30,16 +31,14 @@ partition "Dual Analysis" {
     end fork
 }
 
+:Post-process OCR Text\n- Fix common errors\n- Correct spacing;
+
 :Combine OCR & Structure\n- Match by bounding box overlap (50%)\n- Create unified elements;
 
 :Build Hierarchical Structure\n- Sort by Y,X position\n- Assign hierarchy levels\n- Create parent-child relationships;
 
-partition "Quality Filtering" {
-    :Filter OCR Confidence\n(≥0.85 threshold);
-    :Validate Content\n- Remove garbled text\n- Check alpha ratio (≥50%)\n- Filter special characters;
-}
-
 partition "Semantic Chunking" {
+    :Process All Elements\n(No Quality Filtering);
     :Group Elements\n(150-400 tokens);
     :Create Coherent Content\n(Title - Subtitle: Content);
     :Generate Fragment ID\n(MD5 hash);
