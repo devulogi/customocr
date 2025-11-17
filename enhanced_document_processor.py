@@ -526,52 +526,6 @@ def process_document_builtin_pdf(document: str) -> List[Dict[str, Any]]:
     return all_chunks
 
 
-# Default function - uses Solution 2 (all pages) but you can switch to other options. Here are all three options: process_document_single_page, process_document_all_pages, process_document_builtin_pdf
-def process_document(document: str) -> List[Dict[str, Any]]:
-    """Process entire document and return vectorization-ready chunks."""
-    return process_document_builtin_pdf(document)
-
-
-def generate_hierarchical_markdown(file: str, output_path: str):
-    """Generate markdown file with semantic hierarchy preserved."""
-    print(f"[generate_hierarchical_markdown] Processing {file}")
-
-    ocr = PaddleOCR(use_doc_orientation_classify=True, use_doc_unwarping=True)
-    structure_pipeline = PPStructureV3()
-
-    with open(output_path, "w", encoding="utf-8") as f:
-        f.write(f"\n---\n\n## Document\n\n")
-
-        # Process document directly
-        ocr_result = ocr.predict(file)[0]
-        structure_result = structure_pipeline.predict(file)[0]
-
-        if isinstance(ocr_result, dict) and "rec_texts" in ocr_result:
-            ocr_result["rec_texts"] = [
-                post_process_ocr_text(text) for text in ocr_result["rec_texts"]
-            ]
-
-        combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
-        hierarchy = build_hierarchical_structure(combined_elements, 0)
-
-        # Write hierarchical content in markdown
-        for element in hierarchy:
-            # Quality filtering disabled - process all elements
-            type_marker = {
-                "doc_title": "# ",
-                "title": "### ",
-                "header": "#### ",
-                "paragraph_title": "##### ",
-            }.get(element["type"], "")
-
-            if type_marker:
-                f.write(f"{type_marker}{element['content']}\n\n")
-            else:
-                f.write(f"{element['content']}\n\n")
-
-    print(f"[generate_hierarchical_markdown] Saved to {output_path}")
-
-
 def save_chunks_for_vectorization(
     chunks_instance: List[Dict[str, Any]], output_path: str
 ):
@@ -590,6 +544,12 @@ def save_chunks_for_vectorization(
     print(f"[save_chunks_for_vectorization] Saved to {output_path}")
 
 
+# Default function - uses Solution 2 (all pages) but you can switch to other options. Here are all three options: process_document_single_page, process_document_all_pages, process_document_builtin_pdf
+def process_document(document: str) -> List[Dict[str, Any]]:
+    """Process entire document and return vectorization-ready chunks."""
+    return process_document_builtin_pdf(document)
+
+
 if __name__ == "__main__":
     print("[MAIN] Starting Enhanced Document Processor")
     # pdf_path = get_pdf_path("Simple_Guide.pdf")
@@ -601,9 +561,6 @@ if __name__ == "__main__":
     output_dir = Path("outputs/vectorization")
     output_dir.mkdir(parents=True, exist_ok=True)
     save_chunks_for_vectorization(chunks, str(output_dir / "document_chunks.json"))
-
-    # Generate hierarchical markdown
-    generate_hierarchical_markdown(PDF_PATH, str(output_dir / "document.md"))
 
     print(f"[MAIN] Generated {len(chunks)} chunks for vectorization")
     for i, chunk in enumerate(chunks[:3]):  # Show first 3 chunks
