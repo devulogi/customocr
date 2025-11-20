@@ -7,14 +7,14 @@ skinparam participant {
 
 participant "Client" as C
 participant "DocumentProcessor" as DP
-participant "PDFConverter" as PDF
+participant "PyMuPDF" as PDF
 participant "ImageEnhancer" as IE
 participant "PaddleOCR" as OCR
 participant "PPStructureV3" as PS
+participant "SpatialIndexer" as SI
 participant "HierarchyBuilder" as HB
 participant "ChunkGenerator" as CG
-participant "ElasticsearchClient" as ES
-participant "EmbeddingModel" as EM
+participant "FileSystem" as FS
 
 C -> DP: process_document(pdf_path)
 activate DP
@@ -24,82 +24,80 @@ activate PDF
 PDF --> DP: images[]
 deactivate PDF
 
+DP -> OCR: Initialize PaddleOCR
+DP -> PS: Initialize PPStructureV3
+
 loop for each page
-    DP -> IE: enhance_image_for_ocr(image)
+    DP -> IE: enhance_image_for_ocr(img)
     activate IE
-    IE -> IE: enhance_contrast(1.3x)
-    IE -> IE: enhance_sharpness(1.2x)
-    IE -> IE: apply_denoising()
+    IE -> IE: PIL contrast & sharpness (1.3x, 1.2x)
+    IE -> IE: fastNlMeansDenoisingColored
     IE -> IE: adaptive_sizing(1200-2400px)
-    IE --> DP: enhanced_image
+    IE --> DP: enhanced_img
     deactivate IE
     
+    DP -> FS: save_temp_image(enhanced_img)
+    
     par OCR Analysis
-        DP -> OCR: predict(enhanced_image)
+        DP -> OCR: predict(temp_image_path)
         activate OCR
-        OCR --> DP: ocr_result\n{texts, scores, boxes}
+        OCR --> DP: ocr_result\n{rec_texts, rec_scores, rec_boxes}
         deactivate OCR
     else Structure Analysis
-        DP -> PS: predict(enhanced_image)
+        DP -> PS: predict(temp_image_path)
         activate PS
-        PS --> DP: structure_result\n{elements, labels, bboxes}
+        PS --> DP: structure_result\n{parsing_res_list}
         deactivate PS
     end
     
+    DP -> DP: post_process_ocr_text(texts)
+    note right: Fix OCR errors:\n- Common corrections\n- Spacing fixes
+    
+    DP -> SI: create_spatial_index(structure_elements)
+    activate SI
+    SI --> DP: spatial_grid, grid_size
+    deactivate SI
+    
     DP -> DP: combine_ocr_and_structure()
-    DP -> DP: post_process_ocr_text()
+    note right: O(n log m) matching\nusing spatial indexing
     
     DP -> HB: build_hierarchical_structure(elements, page_num)
     activate HB
-    HB -> HB: sort_by_position()
-    HB -> HB: assign_hierarchy_levels()
-    HB -> HB: create_parent_child_relationships()
+    HB -> HB: sort_by_position(Y, X)
+    HB -> HB: assign_hierarchy_levels(1-5)
+    HB -> HB: level_based_parent_tracking()
     HB --> DP: hierarchy[]
     deactivate HB
     
     DP -> CG: create_semantic_chunks(hierarchy, page_num)
     activate CG
-    CG -> CG: filter_quality_content(confidence≥0.85)
+    note right: Process ALL elements\n(no quality filtering)
     CG -> CG: group_elements(150-400 tokens)
     CG -> CG: create_coherent_content()
-    CG -> CG: generate_fragment_id()
+    note right: Format: Title - Subtitle: Content
+    CG -> CG: generate_fragment_id(MD5)
     CG -> CG: create_chunk_metadata()
-    CG --> DP: chunks[]
+    CG --> DP: page_chunks[]
     deactivate CG
+    
+    DP -> FS: cleanup_temp_file()
+end
+
+par Save Chunks
+    DP -> FS: save_chunks_for_vectorization(chunks)
+    activate FS
+    FS --> DP: document_chunks.json
+    deactivate FS
+else Generate Markdown
+    DP -> FS: generate_hierarchical_markdown(pdf_path)
+    activate FS
+    FS --> DP: document.md
+    deactivate FS
 end
 
 DP --> C: all_chunks[]
 deactivate DP
 
-note over C: Elasticsearch Integration Phase
-
-C -> ES: bulk_create_chunks(chunks)
-activate ES
-ES --> C: upload_response
-deactivate ES
-
-C -> ES: get_chunks_without_vectors()
-activate ES
-ES --> C: chunks_without_embeddings[]
-deactivate ES
-
-loop for each chunk without vector
-    C -> ES: get_chunk_content(fragment_id)
-    activate ES
-    ES --> C: content
-    deactivate ES
-    
-    C -> EM: encode(content)
-    activate EM
-    EM --> C: embedding_vector
-    deactivate EM
-    
-    C -> ES: add_vector_to_chunk(fragment_id, embedding)
-    activate ES
-    ES --> C: update_response
-    deactivate ES
-end
-
-note over C: RAG-Ready Chunks Available
+note over C: Output Files:\n- JSON chunks for vectorization\n- Markdown with preserved hierarchy
 
 @enduml

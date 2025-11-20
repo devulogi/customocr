@@ -1,0 +1,46 @@
+{
+  "name": "OCR Document Processor",
+  "build": {
+    "dockerfile": "Dockerfile",
+    "context": ".."
+  },
+  "features": {
+    "ghcr.io/devcontainers/features/common-utils:2": {
+      "installZsh": true,
+      "configureZshAsDefaultShell": true,
+      "installOhMyZsh": true
+    },
+    "ghcr.io/devcontainers/features/git:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-python.black-formatter",
+        "ms-python.pylint",
+        "ms-toolsai.jupyter",
+        "streetsidesoftware.code-spell-checker",
+        "ms-vscode.vscode-json",
+        "GitHub.copilot",
+        "GitHub.copilot-chat",
+        "AmazonWebServices.aws-toolkit-vscode"
+      ],
+      "settings": {
+        "python.defaultInterpreterPath": "/workspace/venv/bin/python",
+        "python.analysis.extraPaths": ["/workspace"],
+        "python.analysis.typeCheckingMode": "basic",
+        "editor.formatOnSave": true,
+        "editor.codeActionsOnSave": {
+          "source.organizeImports": "always"
+        }
+      }
+    }
+  },
+
+  "mounts": [
+    "source=${localWorkspaceFolder}/pdfs,target=/workspace/pdfs,type=bind",
+    "source=${localWorkspaceFolder}/outputs,target=/workspace/outputs,type=bind"
+  ],
+  "workspaceFolder": "/workspace",
+  "remoteUser": "root"
+}
