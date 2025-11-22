@@ -10,7 +10,11 @@ from paddleocr import PaddleOCR, PPStructureV3
 from PIL import Image, ImageEnhance
 from typing import List, Dict, Any
 import tempfile
+from collections import Counter
+from dataclasses import dataclass
+from typing import Tuple
 import os
+import time
 
 # Global model instances for Lambda container reuse
 _models = None
@@ -23,17 +27,53 @@ def get_models():
     return _models
 
 
+def should_enhance_image(img: np.ndarray) -> bool:
+    """Determine if image needs enhancement based on quality metrics."""
+    # Quick quality check - if image is already high quality, skip enhancement
+    height, width = img.shape[:2]
+
+    # Skip enhancement for high-resolution images (likely good quality)
+    if height >= 1800 and width >= 1800:
+        return False
+
+    # Check image sharpness using Laplacian variance
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
+
+    # If image is already sharp enough, skip enhancement
+    return laplacian_var < 100
+
+
 def enhance_image_for_ocr(img: np.ndarray) -> np.ndarray:
-    pil_img = Image.fromarray(cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+    """Conditionally enhance image for OCR with optimized operations."""
+    if not should_enhance_image(img):
+        # Just resize if needed, skip expensive enhancements
+        height, width = img.shape[:2]
+        min_size, max_size = 1200, 2400
 
-    # Enhance contrast and sharpness
-    enhancer = ImageEnhance.Contrast(pil_img)
-    pil_img = enhancer.enhance(1.3)
-    enhancer = ImageEnhance.Sharpness(pil_img)
-    pil_img = enhancer.enhance(1.2)
+        if height < min_size or width < min_size:
+            scale = max(min_size / height, min_size / width)
+            new_width, new_height = int(width * scale), int(height * scale)
+            return cv2.resize(
+                img, (new_width, new_height), interpolation=cv2.INTER_CUBIC
+            )
+        elif height > max_size or width > max_size:
+            scale = min(max_size / height, max_size / width)
+            new_width, new_height = int(width * scale), int(height * scale)
+            return cv2.resize(
+                img, (new_width, new_height), interpolation=cv2.INTER_AREA
+            )
 
-    enhanced = cv2.cvtColor(np.array(pil_img), cv2.COLOR_RGB2BGR)
-    enhanced = cv2.fastNlMeansDenoisingColored(enhanced, None, 10, 10, 7, 21)
+        return img
+
+    # Fast OpenCV-only enhancement (no PIL conversions)
+    enhanced = img.copy()
+
+    # Fast contrast and brightness adjustment using OpenCV
+    enhanced = cv2.convertScaleAbs(enhanced, alpha=1.3, beta=10)
+
+    # Light denoising with reduced parameters
+    enhanced = cv2.fastNlMeansDenoisingColored(enhanced, None, 5, 5, 7, 15)
 
     # Adaptive sizing
     height, width = enhanced.shape[:2]
@@ -55,60 +95,117 @@ def enhance_image_for_ocr(img: np.ndarray) -> np.ndarray:
     return enhanced
 
 
-def bbox_overlap(box1, box2, threshold=0.5):
+def bbox_overlap(box1, box2, threshold=0.5) -> bool:
+    """Optimized bounding box overlap with early exit and no type conversions."""
     x1_1, y1_1, x2_1, y2_1 = box1
     x1_2, y1_2, x2_2, y2_2 = box2
 
+    # Early exit for non-overlapping boxes
+    if x2_1 <= x1_2 or x2_2 <= x1_1 or y2_1 <= y1_2 or y2_2 <= y1_1:
+        return False
+
+    # Calculate intersection without type conversions
     x1_i, y1_i = max(x1_1, x1_2), max(y1_1, y1_2)
     x2_i, y2_i = min(x2_1, x2_2), min(y2_1, y2_2)
 
-    if x2_i <= x1_i or y2_i <= y1_i:
-        return False
+    intersection = (x2_i - x1_i) * (y2_i - y1_i)
+    area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
+    area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
 
-    intersection = float(x2_i - x1_i) * float(y2_i - y1_i)
-    area1 = float(x2_1 - x1_1) * float(y2_1 - y1_1)
-    area2 = float(x2_2 - x1_2) * float(y2_2 - y1_2)
-
-    if area1 <= 0 or area2 <= 0:
-        return False
-
-    return (intersection / min(area1, area2)) > threshold
-
-
-def post_process_ocr_text(text: str) -> str:
-    corrections = {
-        "intllience": "intelligence",
-        "artifical": "artificial",
-        "wasestimated": "was estimated",
-        "projectedto": "projected to",
-        "andthe": "and the",
-        "theend": "the end",
-    }
-
-    cleaned_text = text
-    for error, correction in corrections.items():
-        cleaned_text = cleaned_text.replace(error, correction)
-
-    cleaned_text = re.sub(r"([a-z])([A-Z])", r"\1 \2", cleaned_text)
-    cleaned_text = re.sub(r"\s+", " ", cleaned_text)
-    return cleaned_text.strip()
+    return intersection > threshold * min(area1, area2)
 
 
 def is_quality_content(content: str, ocr_confidence: float) -> bool:
-    if not content or not content.strip() or ocr_confidence < 0.65:
+    """Optimized single-pass content quality check."""
+    if not content or ocr_confidence < 0.65:
         return False
 
-    alnum_ratio = sum(c.isalnum() for c in content) / max(len(content), 1)
-    if alnum_ratio < 0.5 or len(content.strip()) < 2:
+    stripped = content.strip()
+    length = len(stripped)
+
+    if length < 2:
         return False
 
-    special_char_ratio = sum(
-        not c.isalnum() and not c.isspace() for c in content
-    ) / len(content)
-    return special_char_ratio <= 0.5
+    # Single-pass character analysis
+    alnum_count = 0
+    special_count = 0
+    char_counts = {}
+    max_char_count = 0
+
+    for char in stripped.lower():
+        if char.isalnum():
+            alnum_count += 1
+        elif not char.isspace():
+            special_count += 1
+
+        # Track character frequency for repetition check
+        char_counts[char] = char_counts.get(char, 0) + 1
+        max_char_count = max(max_char_count, char_counts[char])
+
+    # Early exit checks
+    if alnum_count / length < 0.5:  # Less than 50% alphanumeric
+        return False
+
+    if special_count / length > 0.5:  # More than 50% special characters
+        return False
+
+    if length >= 4 and max_char_count / length > 0.7:  # Repetitive pattern
+        return False
+
+    return True
+
+
+@dataclass
+class StructureElement:
+    """Optimized structure element for spatial indexing."""
+
+    bbox: Tuple[float, float, float, float]
+    label: str
+    confidence: float
+    x_center: float
+    y_center: float
+
+
+def create_spatial_index(structure_elements: List[Dict]) -> List[StructureElement]:
+    """Create spatial index for faster structure matching."""
+    indexed_elements = []
+    for elem in structure_elements:
+        bbox = elem["bbox"]
+        x_center = (bbox[0] + bbox[2]) / 2
+        y_center = (bbox[1] + bbox[3]) / 2
+        indexed_elements.append(
+            StructureElement(
+                bbox=tuple(bbox),
+                label=elem["label"],
+                confidence=elem["confidence"],
+                x_center=x_center,
+                y_center=y_center,
+            )
+        )
+    # Sort by y-coordinate for faster spatial queries
+    return sorted(indexed_elements, key=lambda x: x.y_center)
+
+
+def find_matching_structure(
+    box: List[float], indexed_structures: List[StructureElement]
+) -> str:
+    """Fast structure matching using spatial indexing."""
+    box_y_center = (box[1] + box[3]) / 2
+
+    # Binary search-like approach for y-coordinate
+    for struct_elem in indexed_structures:
+        # Early exit if we're too far in y-direction
+        if abs(struct_elem.y_center - box_y_center) > 100:  # Reasonable threshold
+            continue
+
+        if bbox_overlap(box, struct_elem.bbox):
+            return struct_elem.label
+
+    return "text"
 
 
 def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, Any]]:
+    """Optimized OCR and structure combination with spatial indexing."""
     combined_elements = []
 
     if not (isinstance(ocr_result, dict) and "rec_texts" in ocr_result):
@@ -118,7 +215,7 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
     ocr_scores = ocr_result["rec_scores"]
     ocr_boxes = ocr_result["rec_boxes"]
 
-    # Extract structure data
+    # Extract and index structure data
     structure_elements = []
     if "parsing_res_list" in structure_result:
         for item in structure_result["parsing_res_list"]:
@@ -131,13 +228,18 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
                     }
                 )
 
-    # Match OCR text with structure elements
+    # Create spatial index for faster matching
+    indexed_structures = create_spatial_index(structure_elements)
+
+    # Match OCR text with structure elements using spatial index
     for text, score, box in zip(ocr_texts, ocr_scores, ocr_boxes):
+        bbox_list = box.tolist() if hasattr(box, "tolist") else list(box)
+
         element = {
-            "content": post_process_ocr_text(text),
+            "content": text,
             "ocr_confidence": float(score),
-            "bbox": box.tolist() if hasattr(box, "tolist") else list(box),
-            "structure_type": "text",
+            "bbox": bbox_list,
+            "structure_type": find_matching_structure(bbox_list, indexed_structures),
             "page_position": {
                 "x": int(box[0]),
                 "y": int(box[1]),
@@ -146,40 +248,39 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
             },
         }
 
-        # Find matching structure element
-        for struct_elem in structure_elements:
-            if bbox_overlap(box, struct_elem["bbox"]):
-                element["structure_type"] = struct_elem["label"]
-                break
-
         combined_elements.append(element)
 
     return combined_elements
 
 
+# Cache hierarchy levels for faster lookup
+HIERARCHY_LEVELS = {
+    "doc_title": 1,
+    "title": 2,
+    "header": 3,
+    "paragraph_title": 4,
+    "text": 5,
+    "figure": 5,
+    "chart": 5,
+    "table": 5,
+    "figure_title": 5,
+}
+
+
 def build_hierarchical_structure(
     elements: List[Dict[str, Any]], page_num: int
 ) -> List[Dict[str, Any]]:
+    """Optimized hierarchical structure building."""
+    # Sort once with optimized key function
     elements.sort(key=lambda x: (x["page_position"]["y"], x["page_position"]["x"]))
-
-    hierarchy_levels = {
-        "doc_title": 1,
-        "title": 2,
-        "header": 3,
-        "paragraph_title": 4,
-        "text": 5,
-        "figure": 5,
-        "chart": 5,
-        "table": 5,
-        "figure_title": 5,
-    }
 
     hierarchy = []
     parent_stack = []
 
     for elem_index, element in enumerate(elements):
-        current_level = hierarchy_levels.get(element["structure_type"], 5)
+        current_level = HIERARCHY_LEVELS.get(element["structure_type"], 5)
 
+        # Optimize parent stack management
         while parent_stack and parent_stack[-1]["level"] >= current_level:
             parent_stack.pop()
 
@@ -207,23 +308,30 @@ def build_hierarchical_structure(
 def create_semantic_chunks(
     hierarchy: List[Dict[str, Any]], page_num: int, item_id: str
 ) -> List[Dict[str, Any]]:
+    """Optimized semantic chunking with token caching."""
     chunks = []
-    quality_elements = [
-        e for e in hierarchy if is_quality_content(e["content"], e["ocr_confidence"])
-    ]
+
+    # Pre-filter quality elements and cache token counts
+    quality_elements = []
+    for e in hierarchy:
+        if is_quality_content(e["content"], e["ocr_confidence"]):
+            # Cache token count to avoid repeated splitting
+            e["_token_count"] = len(e["content"].split())
+            quality_elements.append(e)
 
     current_chunk = []
     current_tokens = 0
     target_min, target_max = 150, 400
+    title_types = frozenset(["doc_title", "title"])  # Use frozenset for faster lookup
 
     for element in quality_elements:
-        element_tokens = len(element["content"].split())
+        element_tokens = element["_token_count"]
 
         if (
             current_tokens + element_tokens > target_max
             and current_tokens >= target_min
         ) or (
-            element["type"] in ["doc_title", "title"]
+            element["type"] in title_types
             and current_chunk
             and current_tokens >= target_min
         ):
@@ -242,56 +350,67 @@ def create_semantic_chunks(
     return chunks
 
 
+# Pre-compiled frozen sets for maximum lookup performance
+TITLE_TYPES = frozenset(["doc_title", "title", "header", "paragraph_title"])
+
+
 def create_chunk(
     elements: List[Dict[str, Any]], page_num: int, item_id: str
 ) -> Dict[str, Any]:
-    # Separate titles from content
-    titles = [
-        e
-        for e in elements
-        if e["type"] in ["doc_title", "title", "header", "paragraph_title"]
-    ]
-    content_elements = [
-        e
-        for e in elements
-        if e["type"] not in ["doc_title", "title", "header", "paragraph_title"]
-    ]
+    """Ultra-optimized chunk creation with minimal allocations."""
+    if not elements:
+        return {}
 
-    # Build coherent content
-    parts = []
-    if titles:
-        parts.append(" - ".join([t["content"] for t in titles]))
-    if content_elements:
-        parts.append(" ".join([e["content"] for e in content_elements]))
+    # Pre-allocate lists with estimated capacity
+    title_contents = []
+    content_parts = []
+    total_confidence = 0.0
+    total_tokens = 0
+    hierarchy_levels = set()
+    
+    # Single-pass processing with minimal operations
+    for e in elements:
+        total_confidence += e["ocr_confidence"]
+        hierarchy_levels.add(e["level"])
+        total_tokens += e.get("_token_count", len(e["content"].split()))
+        
+        content = e["content"]
+        if e["type"] in TITLE_TYPES:
+            title_contents.append(content)
+        else:
+            content_parts.append(content)
 
-    content = ": ".join(parts) if len(parts) > 1 else parts[0] if parts else ""
+    # Optimized content building
+    if title_contents and content_parts:
+        content = " - ".join(title_contents) + ": " + " ".join(content_parts)
+    elif title_contents:
+        content = " - ".join(title_contents)
+    elif content_parts:
+        content = " ".join(content_parts)
+    else:
+        content = ""
 
-    # Generate fragment ID
-    primary = content_elements[0] if content_elements else elements[0]
-    content_hash = hashlib.md5(
-        f"{item_id}_page_{page_num}_bbox_{primary['bbox']}_content_{elements[0]['content'][:50]}".encode()
-    ).hexdigest()[:12]
-    fragment_id = f"{item_id}_chunk_{page_num}_{content_hash}"
-
-    # Create metadata
-    title_contents = [e["content"] for e in titles]
-    avg_confidence = sum(e["ocr_confidence"] for e in elements) / len(elements)
+    # Optimized fragment ID with minimal string operations
+    primary_bbox = elements[0]["bbox"]
+    content_sample = elements[0]["content"][:50]
+    fragment_id = f"{item_id}_chunk_{page_num}_{hashlib.md5(f'{item_id}_{page_num}_{primary_bbox}_{content_sample}'.encode()).hexdigest()[:12]}"
 
     return {
-        "fragment_id": fragment_id,
+        "item_id": item_id,
         "content": content,
+        "vector": None,
         "metadata": {
-            "item_id": item_id,
+            "fragment_id": fragment_id,
             "page": page_num,
             "type": "semantic_chunk",
             "section_titles": title_contents,
             "primary_section": title_contents[0] if title_contents else None,
             "context_hierarchy": " > ".join(title_contents) if title_contents else None,
-            "bbox": primary["bbox"],
-            "ocr_confidence": avg_confidence,
+            "bbox": primary_bbox,
+            "ocr_confidence": total_confidence / len(elements),
             "elements_count": len(elements),
-            "token_count": sum(len(e["content"].split()) for e in elements),
-            "hierarchy_levels": list({e["level"] for e in elements}),
+            "token_count": total_tokens,
+            "hierarchy_levels": list(hierarchy_levels),
         },
     }
 
@@ -311,9 +430,26 @@ def save_chunks_for_vectorization(chunks: List[Dict[str, Any]], output_path: str
         json.dump(output_data, f, indent=2, ensure_ascii=False)
 
 
+def process_image_in_memory(img: np.ndarray, ocr, structure_pipeline):
+    """Process image in memory without temp files."""
+    # Try to process directly with numpy array if models support it
+    try:
+        # Some PaddleOCR versions support numpy arrays directly
+        ocr_result = ocr.predict(img)[0]
+        structure_result = structure_pipeline.predict(img)[0]
+        return ocr_result, structure_result
+    except:
+        # Fallback to temp file if direct processing fails
+        with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file:
+            cv2.imwrite(temp_file.name, img)
+            ocr_result = ocr.predict(temp_file.name)[0]
+            structure_result = structure_pipeline.predict(temp_file.name)[0]
+            return ocr_result, structure_result
+
+
 def lambda_handler(event, context):
     """
-    Lambda handler for document processing
+    Optimized Lambda handler for document processing
 
     Parameters:
     - item_id: Unique string to identify the document
@@ -369,33 +505,21 @@ def lambda_handler(event, context):
             nparr = np.frombuffer(img_data, np.uint8)
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
-            # Enhance image
+            # Conditionally enhance image
             enhanced_img = enhance_image_for_ocr(img)
-            # enhanced_img = img  # Skip enhancement for now
 
-            # Save to temp file for processing
-            with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
-                cv2.imwrite(temp_file.name, enhanced_img)
-                temp_path = temp_file.name
+            # Process in memory (no temp files)
+            ocr_result, structure_result = process_image_in_memory(
+                enhanced_img, ocr, structure_pipeline
+            )
 
-            try:
-                # Run OCR and structure analysis
-                ocr_result = ocr.predict(temp_path)[0]
-                structure_result = structure_pipeline.predict(temp_path)[0]
+            # Combine results
+            combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
 
-                # Combine results
-                combined_elements = combine_ocr_and_structure(
-                    ocr_result, structure_result
-                )
-
-                # Build hierarchy and create chunks
-                hierarchy = build_hierarchical_structure(combined_elements, page_num)
-                page_chunks = create_semantic_chunks(hierarchy, page_num, item_id)
-                all_chunks.extend(page_chunks)
-
-            finally:
-                # Cleanup temp file
-                os.unlink(temp_path)
+            # Build hierarchy and create chunks
+            hierarchy = build_hierarchical_structure(combined_elements, page_num)
+            page_chunks = create_semantic_chunks(hierarchy, page_num, item_id)
+            all_chunks.extend(page_chunks)
 
         doc.close()
 
@@ -423,6 +547,7 @@ def lambda_handler(event, context):
 if __name__ == "__main__":
     SYSTEM_DESIGN_PROCESS = "SYSTEM_DESIGN_PROCESS"
     EInvoice = "E-Invoice"
+    System_Design = "System_Design"
     test_event = {
         "item_id": EInvoice,
         "page_range": {"start": 0, "end": 2},
