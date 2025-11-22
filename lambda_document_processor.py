@@ -12,8 +12,6 @@ from typing import List, Dict, Any
 import tempfile
 import os
 
-from regex import E
-
 # Global model instances for Lambda container reuse
 _models = None
 
@@ -97,11 +95,11 @@ def post_process_ocr_text(text: str) -> str:
 
 
 def is_quality_content(content: str, ocr_confidence: float) -> bool:
-    if not content or not content.strip() or ocr_confidence < 0.85:
+    if not content or not content.strip() or ocr_confidence < 0.65:
         return False
 
-    alpha_ratio = sum(c.isalpha() for c in content) / max(len(content), 1)
-    if alpha_ratio < 0.5 or len(content.strip()) < 2:
+    alnum_ratio = sum(c.isalnum() for c in content) / max(len(content), 1)
+    if alnum_ratio < 0.5 or len(content.strip()) < 2:
         return False
 
     special_char_ratio = sum(
@@ -373,6 +371,7 @@ def lambda_handler(event, context):
 
             # Enhance image
             enhanced_img = enhance_image_for_ocr(img)
+            # enhanced_img = img  # Skip enhancement for now
 
             # Save to temp file for processing
             with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as temp_file:
