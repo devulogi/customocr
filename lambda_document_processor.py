@@ -367,13 +367,13 @@ def create_chunk(
     total_confidence = 0.0
     total_tokens = 0
     hierarchy_levels = set()
-    
+
     # Single-pass processing with minimal operations
     for e in elements:
         total_confidence += e["ocr_confidence"]
         hierarchy_levels.add(e["level"])
         total_tokens += e.get("_token_count", len(e["content"].split()))
-        
+
         content = e["content"]
         if e["type"] in TITLE_TYPES:
             title_contents.append(content)
@@ -492,8 +492,12 @@ def lambda_handler(event, context):
             end_page = total_pages - 1
 
         # Validate page range
-        start_page = max(0, min(start_page, total_pages - 1))
-        end_page = max(start_page, min(end_page, total_pages - 1))
+        start_page = max(
+            0, min(start_page, total_pages)
+        )  # removed -1 to allow start_page == total_pages
+        end_page = max(
+            start_page, min(end_page, total_pages)
+        )  # removed -1 to allow end_page == total_pages
 
         all_chunks = []
 
@@ -506,14 +510,17 @@ def lambda_handler(event, context):
             img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
 
             # Conditionally enhance image
-            enhanced_img = enhance_image_for_ocr(img)
+            # enhanced_img = enhance_image_for_ocr(img)
+            enhanced_img = img  # Skip enhancement for speed; enable if needed
 
             # Process in memory (no temp files)
+            print(f"Processing page {page_num + 1}/{end_page + 1}")
             ocr_result, structure_result = process_image_in_memory(
                 enhanced_img, ocr, structure_pipeline
             )
 
             # Combine results
+            print(f"Combining OCR and structure for page {page_num + 1}")
             combined_elements = combine_ocr_and_structure(ocr_result, structure_result)
 
             # Build hierarchy and create chunks
@@ -548,9 +555,14 @@ if __name__ == "__main__":
     SYSTEM_DESIGN_PROCESS = "SYSTEM_DESIGN_PROCESS"
     EInvoice = "E-Invoice"
     System_Design = "System_Design"
+    Lazada_Receipt = "Lazada_Receipt"
+    AWS_Certified_Cloud_Practitioner = (
+        "AWS_Certified_Cloud_Practitioner_Exam_Guide_-_Rajesh_Daswani"
+    )
+
     test_event = {
-        "item_id": EInvoice,
-        "page_range": {"start": 0, "end": 2},
+        "item_id": AWS_Certified_Cloud_Practitioner,
+        "page_range": {"start": 0, "end": None},
     }
     result = lambda_handler(test_event, None)
     print(json.dumps(result, indent=2))
