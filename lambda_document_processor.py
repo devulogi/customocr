@@ -23,7 +23,13 @@ _models = None
 def get_models():
     global _models
     if _models is None:
-        _models = {"ocr": PaddleOCR(), "structure": PPStructureV3()}
+        _models = {
+            "ocr": PaddleOCR(
+                use_textline_orientation=False,  # Skip angle detection
+                lang="en",  # English only
+            ),
+            "structure": PPStructureV3(),  # Keep structure for RAG quality
+        }
     return _models
 
 
@@ -205,7 +211,7 @@ def find_matching_structure(
 
 
 def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, Any]]:
-    """Optimized OCR and structure combination with spatial indexing."""
+    """Optimized OCR processing with optional structure analysis."""
     combined_elements = []
 
     if not (isinstance(ocr_result, dict) and "rec_texts" in ocr_result):
@@ -215,9 +221,10 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
     ocr_scores = ocr_result["rec_scores"]
     ocr_boxes = ocr_result["rec_boxes"]
 
-    # Extract and index structure data
-    structure_elements = []
-    if "parsing_res_list" in structure_result:
+    # Extract and index structure data (if available)
+    indexed_structures = []
+    if structure_result and "parsing_res_list" in structure_result:
+        structure_elements = []
         for item in structure_result["parsing_res_list"]:
             if hasattr(item, "bbox") and hasattr(item, "label"):
                 structure_elements.append(
@@ -227,19 +234,24 @@ def combine_ocr_and_structure(ocr_result, structure_result) -> List[Dict[str, An
                         "confidence": getattr(item, "score", 0.0),
                     }
                 )
+        indexed_structures = create_spatial_index(structure_elements)
 
-    # Create spatial index for faster matching
-    indexed_structures = create_spatial_index(structure_elements)
-
-    # Match OCR text with structure elements using spatial index
+    # Process OCR results
     for text, score, box in zip(ocr_texts, ocr_scores, ocr_boxes):
         bbox_list = box.tolist() if hasattr(box, "tolist") else list(box)
+
+        # Use structure matching if available, otherwise default to "text"
+        structure_type = (
+            find_matching_structure(bbox_list, indexed_structures)
+            if indexed_structures
+            else "text"
+        )
 
         element = {
             "content": text,
             "ocr_confidence": float(score),
             "bbox": bbox_list,
-            "structure_type": find_matching_structure(bbox_list, indexed_structures),
+            "structure_type": structure_type,
             "page_position": {
                 "x": int(box[0]),
                 "y": int(box[1]),
@@ -321,7 +333,7 @@ def create_semantic_chunks(
 
     # Pre-allocate chunks list
     chunks = []
-    
+
     target_min, target_max, overlap_tokens = 150, 400, 75
     title_types = frozenset(["doc_title", "title"])
     chunk_counter = 0
@@ -369,11 +381,11 @@ def create_semantic_chunks(
             suffix_sums[-1] = current_chunk[-1]["_token_count"]
             for i in range(len(current_chunk) - 2, -1, -1):
                 suffix_sums[i] = suffix_sums[i + 1] + current_chunk[i]["_token_count"]
-            
+
             # Binary search for overlap point O(log k)
             left, right = 0, len(current_chunk) - 1
             overlap_idx = len(current_chunk)
-            
+
             while left <= right:
                 mid = (left + right) // 2
                 if suffix_sums[mid] >= overlap_tokens:
@@ -381,7 +393,7 @@ def create_semantic_chunks(
                     right = mid - 1
                 else:
                     left = mid + 1
-            
+
             start_idx += overlap_idx
 
     return chunks
@@ -424,7 +436,7 @@ def create_chunk(
     if content_parts:
         content_list.append(": " if title_contents else "")
         content_list.append(" ".join(content_parts))
-    
+
     content = "".join(content_list)
 
     # O(1) fragment ID generation with counter
@@ -472,14 +484,20 @@ def process_image_in_memory(img: np.ndarray, ocr, structure_pipeline):
     try:
         # Some PaddleOCR versions support numpy arrays directly
         ocr_result = ocr.predict(img)[0]
-        structure_result = structure_pipeline.predict(img)[0]
+        structure_result = (
+            structure_pipeline.predict(img)[0] if structure_pipeline else None
+        )
         return ocr_result, structure_result
     except:
         # Fallback to temp file if direct processing fails
         with tempfile.NamedTemporaryFile(suffix=".png", delete=True) as temp_file:
             cv2.imwrite(temp_file.name, img)
             ocr_result = ocr.predict(temp_file.name)[0]
-            structure_result = structure_pipeline.predict(temp_file.name)[0]
+            structure_result = (
+                structure_pipeline.predict(temp_file.name)[0]
+                if structure_pipeline
+                else None
+            )
             return ocr_result, structure_result
 
 
@@ -597,8 +615,8 @@ if __name__ == "__main__":
     )
 
     test_event = {
-        "item_id": System_Design,
-        "page_range": {"start": 0, "end": None},
+        "item_id": AWS_Certified_Cloud_Practitioner,
+        "page_range": {"start": 0, "end": 9},
     }
     result = lambda_handler(test_event, None)
     print(json.dumps(result, indent=2))
