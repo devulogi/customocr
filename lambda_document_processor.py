@@ -308,44 +308,81 @@ def build_hierarchical_structure(
 def create_semantic_chunks(
     hierarchy: List[Dict[str, Any]], page_num: int, item_id: str
 ) -> List[Dict[str, Any]]:
-    """Optimized semantic chunking with token caching."""
-    chunks = []
-
+    """Optimized semantic chunking with overlap support."""
     # Pre-filter quality elements and cache token counts
     quality_elements = []
     for e in hierarchy:
         if is_quality_content(e["content"], e["ocr_confidence"]):
-            # Cache token count to avoid repeated splitting
             e["_token_count"] = len(e["content"].split())
             quality_elements.append(e)
 
-    current_chunk = []
-    current_tokens = 0
-    target_min, target_max = 150, 400
-    title_types = frozenset(["doc_title", "title"])  # Use frozenset for faster lookup
+    if not quality_elements:
+        return []
 
-    for element in quality_elements:
-        element_tokens = element["_token_count"]
+    # Pre-allocate chunks list
+    chunks = []
+    
+    target_min, target_max, overlap_tokens = 150, 400, 75
+    title_types = frozenset(["doc_title", "title"])
+    chunk_counter = 0
+    start_idx = 0
 
-        if (
-            current_tokens + element_tokens > target_max
-            and current_tokens >= target_min
-        ) or (
-            element["type"] in title_types
-            and current_chunk
-            and current_tokens >= target_min
-        ):
+    while start_idx < len(quality_elements):
+        current_chunk = []
+        current_tokens = 0
+        chunk_end_idx = start_idx
 
-            if current_chunk:
-                chunks.append(create_chunk(current_chunk, page_num, item_id))
-            current_chunk = [element]
-            current_tokens = element_tokens
-        else:
+        # Build chunk from start_idx
+        for i in range(start_idx, len(quality_elements)):
+            element = quality_elements[i]
+            element_tokens = element["_token_count"]
+
+            # Check if adding element exceeds max or hits title boundary
+            if (
+                current_tokens + element_tokens > target_max
+                and current_tokens >= target_min
+            ) or (
+                element["type"] in title_types
+                and current_chunk
+                and current_tokens >= target_min
+            ):
+                break
+
             current_chunk.append(element)
             current_tokens += element_tokens
+            chunk_end_idx = i + 1
 
-    if current_chunk:
-        chunks.append(create_chunk(current_chunk, page_num, item_id))
+        # Only create chunk if we have content
+        if not current_chunk:
+            start_idx += 1  # Skip problematic element
+            continue
+
+        chunks.append(create_chunk(current_chunk, page_num, item_id, chunk_counter))
+        chunk_counter += 1
+
+        # Calculate next start position with overlap
+        if len(current_chunk) <= 2 or current_tokens <= overlap_tokens:
+            start_idx = chunk_end_idx
+        else:
+            # Pre-compute all suffix sums O(k)
+            suffix_sums = [0] * len(current_chunk)
+            suffix_sums[-1] = current_chunk[-1]["_token_count"]
+            for i in range(len(current_chunk) - 2, -1, -1):
+                suffix_sums[i] = suffix_sums[i + 1] + current_chunk[i]["_token_count"]
+            
+            # Binary search for overlap point O(log k)
+            left, right = 0, len(current_chunk) - 1
+            overlap_idx = len(current_chunk)
+            
+            while left <= right:
+                mid = (left + right) // 2
+                if suffix_sums[mid] >= overlap_tokens:
+                    overlap_idx = max(1, mid)
+                    right = mid - 1
+                else:
+                    left = mid + 1
+            
+            start_idx += overlap_idx
 
     return chunks
 
@@ -355,7 +392,7 @@ TITLE_TYPES = frozenset(["doc_title", "title", "header", "paragraph_title"])
 
 
 def create_chunk(
-    elements: List[Dict[str, Any]], page_num: int, item_id: str
+    elements: List[Dict[str, Any]], page_num: int, item_id: str, chunk_id: int
 ) -> Dict[str, Any]:
     """Ultra-optimized chunk creation with minimal allocations."""
     if not elements:
@@ -368,11 +405,11 @@ def create_chunk(
     total_tokens = 0
     hierarchy_levels = set()
 
-    # Single-pass processing with minimal operations
+    # Single-pass processing with pre-cached tokens
     for e in elements:
         total_confidence += e["ocr_confidence"]
         hierarchy_levels.add(e["level"])
-        total_tokens += e.get("_token_count", len(e["content"].split()))
+        total_tokens += e["_token_count"]  # Always available from chunking
 
         content = e["content"]
         if e["type"] in TITLE_TYPES:
@@ -380,20 +417,19 @@ def create_chunk(
         else:
             content_parts.append(content)
 
-    # Optimized content building
-    if title_contents and content_parts:
-        content = " - ".join(title_contents) + ": " + " ".join(content_parts)
-    elif title_contents:
-        content = " - ".join(title_contents)
-    elif content_parts:
-        content = " ".join(content_parts)
-    else:
-        content = ""
+    # Optimized content building with list concatenation
+    content_list = []
+    if title_contents:
+        content_list.append(" - ".join(title_contents))
+    if content_parts:
+        content_list.append(": " if title_contents else "")
+        content_list.append(" ".join(content_parts))
+    
+    content = "".join(content_list)
 
-    # Optimized fragment ID with minimal string operations
+    # O(1) fragment ID generation with counter
     primary_bbox = elements[0]["bbox"]
-    content_sample = elements[0]["content"][:50]
-    fragment_id = f"{item_id}_chunk_{page_num}_{hashlib.md5(f'{item_id}_{page_num}_{primary_bbox}_{content_sample}'.encode()).hexdigest()[:12]}"
+    fragment_id = f"{item_id}_p{page_num}_c{chunk_id}_{int(primary_bbox[0])}_{int(primary_bbox[1])}"
 
     return {
         "item_id": item_id,
@@ -561,7 +597,7 @@ if __name__ == "__main__":
     )
 
     test_event = {
-        "item_id": AWS_Certified_Cloud_Practitioner,
+        "item_id": System_Design,
         "page_range": {"start": 0, "end": None},
     }
     result = lambda_handler(test_event, None)
