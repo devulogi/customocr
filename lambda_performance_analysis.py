@@ -16,6 +16,7 @@ def create_performance_analysis():
     output_file = "Lambda_Document_Processor_Performance_Analysis.xlsx"
     writer = pd.ExcelWriter(output_file, engine='xlsxwriter')
     workbook = writer.book
+    workbook.nan_inf_to_errors = True
     
     # Define formats
     header_format = workbook.add_format({
