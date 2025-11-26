@@ -1,20 +1,15 @@
 """Lambda Document Processor - OCR and Structure Analysis for RAG"""
 
 import json
-import hashlib
-import re
-import pymupdf as fitz
+import os
+import tempfile
+from dataclasses import dataclass
+from typing import List, Dict, Any, Tuple
+
 import cv2
 import numpy as np
+import pymupdf as fitz
 from paddleocr import PaddleOCR, PPStructureV3
-from PIL import Image, ImageEnhance
-from typing import List, Dict, Any
-import tempfile
-from collections import Counter
-from dataclasses import dataclass
-from typing import Tuple
-import os
-import time
 
 # Global model instances for Lambda container reuse
 _models = None
