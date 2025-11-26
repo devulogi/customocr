@@ -168,7 +168,7 @@ def create_performance_analysis():
     summary_df = pd.DataFrame(function_summary)
     summary_df.to_excel(writer, sheet_name='Performance Summary', index=False)
     
-    # 4. COST ANALYSIS
+    # 4. COST ANALYSIS WITH FORMULAS
     scenarios = [
         {'Scenario': 'Small Documents (1-50 pages)', 'Monthly Volume': 1000, 'Avg Pages': 25},
         {'Scenario': 'Medium Documents (50-500 pages)', 'Monthly Volume': 500, 'Avg Pages': 250},
@@ -197,6 +197,7 @@ def create_performance_analysis():
             'Monthly Documents': volume,
             'Monthly Pages': monthly_pages,
             'Cost per Document ($)': cost_per_doc,
+            'Cost Formula': f'({processing_time}s × 3GB × $0.0000166667) + ({batches} batches × $0.0000002)',
             'Monthly Cost ($)': monthly_cost,
             'Annual Cost ($)': monthly_cost * 12,
             'Processing Time per Doc (min)': processing_time / 60,
@@ -206,47 +207,75 @@ def create_performance_analysis():
     cost_df = pd.DataFrame(cost_analysis)
     cost_df.to_excel(writer, sheet_name='Cost Analysis', index=False)
     
-    # 5. OPTIMIZATION RECOMMENDATIONS
+    # 4.1 AWS PRICING BREAKDOWN
+    pricing_breakdown = [
+        {'Component': 'Lambda Compute', 'Rate': '$0.0000166667 per GB-second', 'Basis': 'AWS Lambda pricing for 3GB memory allocation'},
+        {'Component': 'Lambda Requests', 'Rate': '$0.0000002 per request', 'Basis': 'AWS Lambda pricing for invocations'},
+        {'Component': 'Memory Allocation', 'Value': '3GB (3008MB)', 'Basis': 'Required for PaddleOCR models in memory'},
+        {'Component': 'Processing Time', 'Formula': 'Pages × 0.5s + 20s cold start', 'Basis': 'Measured performance: 0.5s per page + one-time cold start'},
+        {'Component': 'Batch Size', 'Value': '10 pages per Lambda', 'Basis': 'Current architecture design for optimal performance'},
+        {'Component': 'Cold Start', 'Impact': '20s per container', 'Basis': 'Model loading time measured in testing'}
+    ]
+    
+    pricing_df = pd.DataFrame(pricing_breakdown)
+    pricing_df.to_excel(writer, sheet_name='Pricing Breakdown', index=False)
+    
+    # 5. OPTIMIZATION RECOMMENDATIONS WITH DETAILED COSTS
     optimizations = [
         {
             'Optimization': 'Provisioned Concurrency',
             'Impact': 'Eliminates cold start',
             'Cost': '+$50-200/month',
+            'Cost Formula': '5-20 instances × $0.0000097 per GB-second × 3GB × 2,592,000s/month',
             'Time Savings': '20s per job',
             'ROI': 'High for frequent use',
-            'Implementation': 'AWS Console setting'
+            'Implementation': 'AWS Console setting',
+            'Timeline': '1 day',
+            'Timeline Reason': 'Simple AWS console configuration change'
         },
         {
             'Optimization': 'Increase Batch Size to 50 pages',
             'Impact': 'Reduces cold start impact',
             'Cost': 'Neutral',
+            'Cost Formula': 'Same total processing time, fewer Lambda invocations',
             'Time Savings': '15-20s per job',
             'ROI': 'Very High',
-            'Implementation': 'Code change'
+            'Implementation': 'Code change',
+            'Timeline': '2-3 days',
+            'Timeline Reason': 'Code modification + testing + deployment'
         },
         {
             'Optimization': 'OCR-Only Mode',
             'Impact': '40% faster processing',
             'Cost': 'Reduces by 30%',
+            'Cost Formula': 'Saves 0.15s per page × $0.00005 per second',
             'Time Savings': '0.15s per page',
             'ROI': 'High for simple docs',
-            'Implementation': 'Feature flag'
+            'Implementation': 'Feature flag',
+            'Timeline': '1 week',
+            'Timeline Reason': 'Feature flag implementation + A/B testing'
         },
         {
             'Optimization': 'Mobile OCR Models',
             'Impact': '50% faster inference',
             'Cost': 'Reduces by 40%',
+            'Cost Formula': 'Saves 0.2s per page × $0.00005 per second',
             'Time Savings': '0.2s per page',
             'ROI': 'Medium (accuracy trade-off)',
-            'Implementation': 'Model configuration'
+            'Implementation': 'Model configuration',
+            'Timeline': '1-2 weeks',
+            'Timeline Reason': 'Model testing + accuracy validation + deployment'
         },
         {
             'Optimization': 'Parallel Processing',
             'Impact': 'Linear speedup',
             'Cost': 'Same per page',
+            'Cost Formula': 'Same total compute, distributed across multiple Lambdas',
             'Time Savings': 'Up to 10x faster',
             'ROI': 'Very High',
-            'Implementation': 'Architecture change'
+            'Implementation': 'Architecture change',
+            'Timeline': '2-4 weeks',
+            'Timeline Reason': 'Architecture redesign + SQS/SNS setup + testing + deployment'
         }
     ]
     
@@ -317,7 +346,7 @@ def create_performance_analysis():
     comp_df = pd.DataFrame(competitors)
     comp_df.to_excel(writer, sheet_name='Competitive Analysis', index=False)
     
-    # 8. RISK ASSESSMENT
+    # 8. RISK ASSESSMENT WITH DETAILED REASONING
     risks = [
         {
             'Risk': 'Cold Start Latency',
@@ -325,7 +354,9 @@ def create_performance_analysis():
             'Impact': 'Medium',
             'Mitigation': 'Provisioned Concurrency',
             'Cost': '$100/month',
-            'Timeline': '1 day'
+            'Cost Basis': '10 instances × $0.0000097/GB-s × 3GB × 2,592,000s',
+            'Timeline': '1 day',
+            'Timeline Reason': 'AWS console configuration, no code changes required'
         },
         {
             'Risk': 'Lambda Timeout (15 min)',
@@ -333,7 +364,9 @@ def create_performance_analysis():
             'Impact': 'High',
             'Mitigation': 'Batch size limits',
             'Cost': 'None',
-            'Timeline': 'Immediate'
+            'Cost Basis': 'Configuration change only',
+            'Timeline': 'Immediate',
+            'Timeline Reason': 'Simple parameter adjustment in existing code'
         },
         {
             'Risk': 'Model Accuracy Degradation',
@@ -341,7 +374,9 @@ def create_performance_analysis():
             'Impact': 'Medium',
             'Mitigation': 'A/B testing, monitoring',
             'Cost': '$500/month',
-            'Timeline': '2 weeks'
+            'Cost Basis': 'CloudWatch monitoring + additional compute for A/B testing',
+            'Timeline': '2 weeks',
+            'Timeline Reason': 'Setup monitoring infrastructure + implement A/B framework'
         },
         {
             'Risk': 'Concurrent Execution Limits',
@@ -349,7 +384,9 @@ def create_performance_analysis():
             'Impact': 'Medium',
             'Mitigation': 'Request limit increase',
             'Cost': 'None',
-            'Timeline': '1 week'
+            'Cost Basis': 'AWS support request, no additional charges',
+            'Timeline': '1 week',
+            'Timeline Reason': 'AWS support ticket processing time + approval'
         },
         {
             'Risk': 'Storage Costs (Large Scale)',
@@ -357,7 +394,9 @@ def create_performance_analysis():
             'Impact': 'Low',
             'Mitigation': 'Data lifecycle policies',
             'Cost': 'Savings',
-            'Timeline': '1 week'
+            'Cost Basis': 'Automated S3 lifecycle transitions reduce storage costs',
+            'Timeline': '1 week',
+            'Timeline Reason': 'S3 lifecycle policy configuration + testing'
         }
     ]
     
@@ -379,6 +418,8 @@ def create_performance_analysis():
             df = summary_df
         elif sheet_name == 'Cost Analysis':
             df = cost_df
+        elif sheet_name == 'Pricing Breakdown':
+            df = pricing_df
         elif sheet_name == 'Optimization Options':
             df = opt_df
         elif sheet_name == 'Technical Specifications':
@@ -390,8 +431,16 @@ def create_performance_analysis():
         else:
             continue
             
-        # Set column widths
-        worksheet.set_column('A:Z', 15)
+        # Auto-adjust column widths based on content
+        for col_num, column in enumerate(df.columns):
+            # Calculate max width needed for this column
+            max_len = len(str(column))  # Header length
+            for row_data in df.iloc[:, col_num]:
+                max_len = max(max_len, len(str(row_data)))
+            
+            # Set column width with some padding (max 50 chars)
+            adjusted_width = min(max_len + 2, 50)
+            worksheet.set_column(col_num, col_num, adjusted_width)
         
         # Apply header formatting only to columns with content
         max_col = len(df.columns)
@@ -437,16 +486,17 @@ def create_performance_analysis():
     writer.close()
     
     print(f"✅ Analysis complete! Generated: {output_file}")
-    print(f"📊 Report includes 8 comprehensive worksheets:")
+    print(f"📊 Report includes 10 comprehensive worksheets:")
     print("   • Executive Summary")
     print("   • Performance by Scale (with charts)")
     print("   • Function Breakdown (all lambda functions)")
     print("   • Performance Summary (by category)")
-    print("   • Cost Analysis")
-    print("   • Optimization Options")
+    print("   • Cost Analysis (with formulas)")
+    print("   • Pricing Breakdown (AWS rates & basis)")
+    print("   • Optimization Options (with cost formulas & timelines)")
     print("   • Technical Specifications")
     print("   • Competitive Analysis")
-    print("   • Risk Assessment")
+    print("   • Risk Assessment (with cost basis & timeline reasoning)")
     
     return output_file
 
